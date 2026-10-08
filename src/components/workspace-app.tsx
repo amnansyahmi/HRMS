@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import dynamic from "next/dynamic";
 import {
   LayoutDashboard,
@@ -38,6 +38,10 @@ import { api, ApiError, initials } from "@/lib/client";
 import { isStaff, type Workspace, type Kind, type HRRecord } from "@/lib/types";
 import type { AssistantIntent } from "./assistant-page";
 import { toast } from "sonner";
+import { NotificationPanel } from "./operations-page";
+const OperationsPage = dynamic(() =>
+  import("./operations-page").then((m) => m.OperationsPage),
+);
 const OverviewPage = dynamic(() =>
   import("./overview-page").then((m) => m.OverviewPage),
 );
@@ -83,11 +87,16 @@ const navigation = [
     items: [
       { page: "overview", label: "Overview", icon: LayoutDashboard },
       { page: "people", label: "People", icon: Users },
+      { page: "employee-files", label: "Employee files", icon: FileText },
       { page: "attendance", label: "Attendance & shifts", icon: Clock3 },
       { page: "leave", label: "Leave", icon: CalendarDays },
       { page: "claims", label: "Claims", icon: Receipt },
+      { page: "work-requests", label: "Time requests", icon: Clock3 },
+      { page: "hr-policies", label: "HR policies", icon: CalendarDays },
+      { page: "payments", label: "Payments", icon: Wallet },
       { page: "payroll", label: "Payroll & payslips", icon: Wallet },
       { page: "performance", label: "Goals & evaluations", icon: Target },
+      { page: "reviews", label: "Review cycles", icon: ClipboardCheck },
     ],
   },
   {
@@ -102,10 +111,17 @@ const navigation = [
     items: [
       { page: "meetings", label: "Meeting notes", icon: FileText },
       { page: "policies", label: "Company handbook", icon: BookOpen },
+      { page: "announcements", label: "Announcements", icon: MessageSquare },
     ],
   },
 ] as const;
 const labels: Record<Page, string> = {
+  "employee-files": "Employee files",
+  "work-requests": "Time requests",
+  "hr-policies": "HR policies",
+  reviews: "Review cycles",
+  announcements: "Announcements",
+  payments: "Payments",
   overview: "Overview",
   people: "People",
   attendance: "Attendance & shifts",
@@ -120,7 +136,26 @@ const labels: Record<Page, string> = {
   assistant: "People AI",
   settings: "Settings",
 };
-const kindPage: Record<Kind, Page> = {
+const kindPage: Partial<Record<Kind, Page>> = {
+  document: "employee-files",
+  asset: "employee-files",
+  lifecycle: "employee-files",
+  letter: "employee-files",
+  job_history: "employee-files",
+  announcement: "announcements",
+  overtime: "work-requests",
+  time_off: "work-requests",
+  lateness: "work-requests",
+  attendance_correction: "work-requests",
+  goal_update: "work-requests",
+  leave_type: "hr-policies",
+  claim_type: "hr-policies",
+  location: "hr-policies",
+  holiday: "hr-policies",
+  review_cycle: "reviews",
+  evaluation_template: "reviews",
+  evaluation: "reviews",
+  payment_voucher: "payments",
   employee: "people",
   department: "people",
   shift: "attendance",
@@ -206,9 +241,7 @@ function Sidebar({
       <nav aria-label="Workspace navigation">
         {navigation.map((group) => {
           const items = group.items.filter(
-            (item) =>
-              staff ||
-              !["recruitment", "assessments", "meetings"].includes(item.page),
+            (item) => staff || !["recruitment", "payments"].includes(item.page),
           );
           if (!items.length) return null;
           return (
@@ -303,12 +336,24 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
     [searchOpen, setSearchOpen] = useState(false),
     [search, setSearch] = useState(""),
     [acting, setActing] = useState(false);
+  const generation = useRef(0);
   const refresh = useCallback(async () => {
+    const requestGeneration = ++generation.current;
     try {
       const data = await api<Workspace>("/api/workspace");
+      while (data.nextCursor) {
+        if (generation.current !== requestGeneration) return;
+        const page = await api<Pick<Workspace, "records" | "nextCursor">>(
+          "/api/workspace?cursor=" + encodeURIComponent(data.nextCursor),
+        );
+        data.records.push(...page.records);
+        data.nextCursor = page.nextCursor;
+      }
+      if (generation.current !== requestGeneration) return;
       setWorkspace(data);
       setState("ready");
     } catch (e) {
+      if (generation.current !== requestGeneration) return;
       if (e instanceof ApiError && e.status === 401) {
         setWorkspace(null);
         setState("auth");
@@ -319,27 +364,17 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
     }
   }, []);
   useEffect(() => {
-    let active = true;
-    api<Workspace>("/api/workspace")
-      .then((data) => {
-        if (!active) return;
-        setWorkspace(data);
-        setState("ready");
+    const pendingRequests = generation;
+    void Promise.resolve()
+      .then(refresh)
+      .then(() => {
         const view = new URLSearchParams(window.location.search).get("view");
         if (view && view in labels) setPage(view as Page);
-      })
-      .catch((e) => {
-        if (!active) return;
-        if (e instanceof ApiError && e.status === 401) setState("auth");
-        else {
-          setError(e.message);
-          setState("error");
-        }
       });
     return () => {
-      active = false;
+      pendingRequests.current++;
     };
-  }, []);
+  }, [refresh]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "k") {
@@ -383,6 +418,7 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
   }
   async function logout() {
     try {
+      generation.current++;
       await api("/api/auth/logout", {});
       setWorkspace(null);
       setState("auth");
@@ -421,8 +457,7 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
       </div>
     );
   const staff = isStaff(workspace.actor),
-    restricted =
-      !staff && ["recruitment", "assessments", "meetings"].includes(page),
+    restricted = !staff && ["recruitment", "payments"].includes(page),
     visiblePage = restricted ? "overview" : page;
   const results = search.trim()
     ? workspace.records
@@ -498,6 +533,7 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
                     : "AI setup"}
                 </span>
               )}
+              <NotificationPanel />
               <button
                 className="topbar-avatar"
                 aria-label="Open settings"
@@ -507,6 +543,29 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
               </button>
             </div>
           </header>
+          <nav className="mobile-bottom-nav" aria-label="Phone navigation">
+            {(
+              [
+                { page: "overview", label: "Home", icon: LayoutDashboard },
+                { page: "attendance", label: "Time", icon: Clock3 },
+                { page: "leave", label: "Leave", icon: CalendarDays },
+                { page: "assistant", label: "AI", icon: MessageSquare },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.page}
+                className={page === item.page ? "active" : ""}
+                onClick={() => go(item.page)}
+              >
+                <item.icon size={19} />
+                <span>{item.label}</span>
+              </button>
+            ))}
+            <button onClick={() => setMobileOpen(true)}>
+              <PanelLeftOpen size={19} />
+              <span>More</span>
+            </button>
+          </nav>
           {workspace.truncated ? (
             <div className="info-note">
               This workspace view contains the latest 2,000 records. Export or
@@ -521,7 +580,19 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
                 : "main-content"
             }
           >
-            {visiblePage === "overview" ? (
+            {[
+              "employee-files",
+              "work-requests",
+              "hr-policies",
+              "reviews",
+              "announcements",
+              "payments",
+            ].includes(visiblePage) ? (
+              <OperationsPage
+                key={visiblePage}
+                view={visiblePage as import("./operations-page").OperationsView}
+              />
+            ) : visiblePage === "overview" ? (
               <OverviewPage />
             ) : visiblePage === "people" ? (
               <PeoplePage />
@@ -593,7 +664,7 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
               <button
                 key={r.id}
                 onClick={() => {
-                  go(kindPage[r.kind]);
+                  go(kindPage[r.kind] || "people");
                   setSearchOpen(false);
                 }}
               >
@@ -607,7 +678,7 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
                       r.kind,
                   )}
                 </span>
-                <small>{labels[kindPage[r.kind]]}</small>
+                <small>{labels[kindPage[r.kind] || "people"]}</small>
               </button>
             ))}
             {search && !results.length ? (

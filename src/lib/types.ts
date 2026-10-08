@@ -13,6 +13,25 @@ export const kinds = [
   "assessment_result",
   "meeting",
   "policy",
+  "document",
+  "asset",
+  "job_history",
+  "lifecycle",
+  "letter",
+  "announcement",
+  "location",
+  "holiday",
+  "overtime",
+  "time_off",
+  "attendance_correction",
+  "lateness",
+  "leave_type",
+  "claim_type",
+  "review_cycle",
+  "evaluation_template",
+  "evaluation",
+  "goal_update",
+  "payment_voucher",
 ] as const;
 export type Kind = (typeof kinds)[number];
 export type Role = "owner" | "hr" | "manager" | "employee";
@@ -42,7 +61,20 @@ export interface Company {
     timezone: string;
     workDays: number[];
     holidays: string[];
+    overtimeRates: {
+      Normal: number;
+      "Rest day": number;
+      "Public holiday": number;
+    };
     aiEnabled: boolean;
+    aiActionsEnabled: boolean;
+    aiAgents: {
+      hr: boolean;
+      recruit: boolean;
+      resume: boolean;
+      meeting: boolean;
+      preferences: boolean;
+    };
     careersIntro: string;
     registrationNo: string;
     taxNo: string;
@@ -69,6 +101,15 @@ export interface Workspace {
   ai: { configured: boolean; enabled: boolean; model: string };
   demo: boolean;
   truncated: boolean;
+  nextCursor: string | null;
+  notifications: {
+    id: string;
+    title: string;
+    body: string;
+    href: string;
+    read_at: string | null;
+    created_at: string;
+  }[];
 }
 export const staffRoles: Role[] = ["owner", "hr"];
 export function isStaff(actor: Pick<Actor, "role">) {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { extendedSchemas, employeeFields } from "./extended-schema";
 import type { Kind } from "./types";
 const text = z.string().trim().min(1).max(200);
 const long = z.string().trim().max(24000).default("");
@@ -24,7 +25,9 @@ const question = z
     "Correct answer must match an option",
   );
 export const schemas = {
+  ...extendedSchemas,
   employee: z.object({
+    ...employeeFields,
     name: text,
     email: z.email().toLowerCase(),
     title: text,
@@ -48,7 +51,17 @@ export const schemas = {
       start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
       end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
       days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
-      employeeIds: z.array(z.string().uuid()).max(500),
+      employeeIds: z.array(z.string().uuid()).max(500).default([]),
+      departmentIds: z.array(z.uuid()).max(100).default([]),
+      locationId: optionalId,
+      anchorDate: date.nullable().default(null),
+      rotationWeeks: z.coerce.number().int().min(1).max(12).default(1),
+      activeWeeks: z
+        .array(z.number().int().min(1).max(12))
+        .min(1)
+        .max(12)
+        .default([1]),
+      endDate: date.nullable().default(null),
       graceMinutes: z.coerce.number().int().min(0).max(120).default(5),
     })
     .refine((v) => v.start !== v.end, "Shift start and end must differ"),
@@ -62,18 +75,29 @@ export const schemas = {
   }),
   leave: z
     .object({
-      type: z.enum(["Annual", "Sick", "Unpaid", "Other"]),
+      type: text,
+      leaveTypeId: optionalId,
+      unit: z
+        .enum(["Full day", "Morning", "Afternoon", "Hours"])
+        .default("Full day"),
+      hours: z.coerce.number().min(0.25).max(24).default(1),
+      startHour: z.coerce.number().min(0).max(23.75).default(9),
+      evidenceId: optionalId,
+      approvalStep: z.number().int().min(0).max(2).default(0),
       startDate: date,
       endDate: date,
       reason: long,
-      days: z.number().int().min(1).max(366),
+      days: z.number().min(0.01).max(366),
       status: z.enum(["Pending", "Approved", "Rejected", "Cancelled"]),
       reviewedBy: optionalId,
       reviewNote: z.string().max(1000).default(""),
     })
     .refine((v) => v.endDate >= v.startDate, "End date must follow start date"),
   claim: z.object({
-    category: z.enum(["Travel", "Meals", "Medical", "Equipment", "Other"]),
+    category: text,
+    claimTypeId: optionalId,
+    mileageKm: z.coerce.number().min(0).max(10000).default(0),
+    approvalStep: z.number().int().min(0).max(2).default(0),
     date,
     amount: money.refine((v) => v > 0, "Amount must be greater than zero"),
     description: text,
@@ -83,6 +107,20 @@ export const schemas = {
     reviewNote: z.string().max(1000).default(""),
   }),
   payroll: z.object({
+    taxableNormal: money.nullable().default(null),
+    taxableAdditional: money.nullable().default(null),
+    epfWages: money.nullable().default(null),
+    epfNormalWages: money.nullable().default(null),
+    socsoWages: money.nullable().default(null),
+    unpaidDeduction: money,
+    reimbursements: money,
+    commission: money,
+    zakat: money,
+    calculation: z.record(z.string(), z.unknown()).default({}),
+    inputRecordIds: z.array(z.uuid()).default([]),
+    bankName: z.string().max(100).default(""),
+    bankAccount: z.string().max(40).default(""),
+    nric: z.string().max(40).default(""),
     period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
     base: money,
     allowance: money,
@@ -105,7 +143,15 @@ export const schemas = {
     note: long,
   }),
   goal: z.object({
+    scope: z.enum(["Individual", "Team", "Company"]).default("Individual"),
+    departmentId: optionalId,
     title: text,
+    cycleId: optionalId,
+    parentId: optionalId,
+    perspective: z
+      .enum(["Financial", "Customer", "Process", "Learning"])
+      .default("Learning"),
+    weight: z.coerce.number().positive().max(100).default(1),
     target: z.coerce.number().positive().max(10000000),
     progress: z.coerce.number().min(0).max(10000000).default(0),
     unit: text.default("items"),
@@ -115,6 +161,8 @@ export const schemas = {
     feedback: long,
   }),
   job: z.object({
+    screeningQuestions: z.array(text).max(10).default([]),
+    templateName: z.string().max(100).default(""),
     title: text,
     departmentId: optionalId,
     location: text,
@@ -124,6 +172,18 @@ export const schemas = {
     status: z.enum(["Draft", "Published", "Closed"]).default("Draft"),
   }),
   candidate: z.object({
+    screeningAnswers: z
+      .array(z.object({ question: text, answer: z.string().max(2000) }))
+      .max(10)
+      .default([]),
+    stageHistory: z
+      .array(
+        z.object({ stage: z.string(), at: z.iso.datetime(), by: z.string() }),
+      )
+      .max(100)
+      .default([]),
+    employeeId: optionalId,
+    interviewAt: z.iso.datetime().nullable().default(null),
     name: text,
     email: z.email().toLowerCase(),
     phone: z.string().max(40).default(""),
@@ -138,13 +198,15 @@ export const schemas = {
   }),
   assessment: z.object({
     title: text,
-    type: z.enum(["Skills", "Work preferences"]),
+    type: z.enum(["Skills", "Work preferences", "DISC", "DOPE"]),
     instructions: long,
     questions: z.array(question).min(1).max(30),
   }),
   assessment_result: z.object({
     assessmentId: z.string().uuid(),
-    candidateId: z.string().uuid(),
+    candidateId: optionalId,
+    employeeId: optionalId,
+    profile: z.record(z.string(), z.number()).default({}),
     answers: z.array(z.number().int().min(0).max(5)).max(30),
     score: z.number().min(0).max(100),
     tokenHash: z.string(),
@@ -152,15 +214,50 @@ export const schemas = {
     submittedAt: z.iso.datetime().nullable(),
     assessmentSnapshot: z.object({
       title: text,
-      type: z.enum(["Skills", "Work preferences"]),
+      type: z.enum(["Skills", "Work preferences", "DISC", "DOPE"]),
       instructions: long,
       questions: z.array(question).min(1).max(30),
     }),
   }),
   meeting: z.object({
+    calendarUID: z.string().max(500).default(""),
+    calendarStartsAt: z.iso.datetime().nullable().default(null),
+    calendarEndsAt: z.iso.datetime().nullable().default(null),
+    createdBy: optionalId,
+    sharedEmployeeIds: z.array(z.uuid()).max(500).default([]),
+    linkedEmployeeId: optionalId,
+    audioIds: z.array(z.uuid()).max(500).default([]),
+    audioTracks: z
+      .array(
+        z.object({
+          id: z.uuid(),
+          parts: z.array(z.uuid()).max(50),
+          duration: z.number().positive().max(10800),
+          mime: z.string().max(100),
+          filename: z.string().max(160),
+        }),
+      )
+      .max(10)
+      .default([]),
+    flags: z
+      .array(z.object({ seconds: z.number().min(0), label: text }))
+      .max(100)
+      .default([]),
+    segments: z
+      .array(
+        z.object({
+          start: z.number().min(0),
+          end: z.number().min(0),
+          speaker: z.string().max(100).default("Speaker"),
+          text: z.string().max(24000),
+        }),
+      )
+      .max(10000)
+      .default([]),
+    attendees: z.string().max(1000).default(""),
     title: text,
     date,
-    transcript: z.string().trim().max(24000),
+    transcript: z.string().trim().max(300000),
     summary: long,
     actions: z
       .array(
@@ -194,7 +291,30 @@ export const companySettings = z.object({
   }),
   workDays: z.array(z.number().int().min(0).max(6)).min(1).max(7),
   holidays: z.array(date).max(366),
+  overtimeRates: z
+    .object({
+      Normal: z.number().min(1).max(10),
+      "Rest day": z.number().min(1).max(10),
+      "Public holiday": z.number().min(1).max(10),
+    })
+    .default({ Normal: 1.5, "Rest day": 2, "Public holiday": 3 }),
   aiEnabled: z.boolean(),
+  aiActionsEnabled: z.boolean().default(false),
+  aiAgents: z
+    .object({
+      hr: z.boolean(),
+      recruit: z.boolean(),
+      resume: z.boolean(),
+      meeting: z.boolean(),
+      preferences: z.boolean(),
+    })
+    .default({
+      hr: true,
+      recruit: true,
+      resume: true,
+      meeting: true,
+      preferences: true,
+    }),
   careersIntro: z.string().max(3000),
   registrationNo: z.string().max(60),
   taxNo: z.string().max(60),

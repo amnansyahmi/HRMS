@@ -18,24 +18,12 @@ import { api } from "@/lib/client";
 import { toast } from "sonner";
 import { useWorkspace } from "./workspace-context";
 import { isStaff, type Data, type Kind, type HRRecord } from "@/lib/types";
-type Field = {
-  key: string;
-  label: string;
-  type?:
-    | "text"
-    | "number"
-    | "textarea"
-    | "date"
-    | "time"
-    | "select"
-    | "boolean"
-    | "multi";
-  options?: string[];
-  source?: Kind;
-  required?: boolean;
-  min?: number;
-  step?: string;
-};
+import {
+  extendedFields,
+  employeeDetails,
+  requestFields,
+  type Field,
+} from "./extended-fields";
 const employment = ["Full-time", "Part-time", "Contract", "Intern"];
 const fields: Partial<Record<Kind, Field[]>> = {
   employee: [
@@ -242,9 +230,8 @@ const fields: Partial<Record<Kind, Field[]>> = {
     { key: "date", label: "Date", type: "date", required: true },
     {
       key: "transcript",
-      label: "Transcript or raw notes",
+      label: "Transcript or raw notes (optional if recording audio)",
       type: "textarea",
-      required: true,
     },
     { key: "summary", label: "Reviewed summary", type: "textarea" },
   ],
@@ -264,6 +251,10 @@ const fields: Partial<Record<Kind, Field[]>> = {
       "allowance",
       "overtime",
       "bonus",
+      "commission",
+      "unpaidDeduction",
+      "reimbursements",
+      "zakat",
       "epfEmployee",
       "socsoEmployee",
       "eisEmployee",
@@ -289,6 +280,10 @@ const fields: Partial<Record<Kind, Field[]>> = {
             epfEmployer: "EPF · employer",
             socsoEmployer: "SOCSO · employer",
             eisEmployer: "EIS · employer",
+            commission: "Commission",
+            unpaidDeduction: "Unpaid leave deduction",
+            reimbursements: "Claim reimbursements",
+            zakat: "Zakat",
           } as Record<string, string>
         )[key] + " (RM)",
       type: "number" as const,
@@ -302,6 +297,47 @@ const fields: Partial<Record<Kind, Field[]>> = {
     },
   ],
 };
+Object.assign(fields, extendedFields);
+fields.payroll!.push(
+  ...[
+    "taxableNormal",
+    "taxableAdditional",
+    "epfWages",
+    "epfNormalWages",
+    "socsoWages",
+  ].map((key) => ({
+    key,
+    label: key.replace(/([A-Z])/g, " $1") + " override (RM; empty = derive)",
+    type: "number" as const,
+  })),
+);
+fields.employee!.push(...employeeDetails);
+fields.shift!.push(
+  {
+    key: "departmentIds",
+    label: "Assigned departments",
+    type: "multi",
+    source: "department",
+  },
+  {
+    key: "locationId",
+    label: "Shift workplace",
+    type: "select",
+    source: "location",
+  },
+  { key: "anchorDate", label: "Rotation starts", type: "date" },
+  { key: "rotationWeeks", label: "Weeks per rotation", type: "number" },
+  { key: "activeWeeks", label: "Active rotation weeks (1–12)", type: "lines" },
+  { key: "endDate", label: "Rotation ends", type: "date" },
+);
+for (const [kind, extras] of Object.entries(requestFields))
+  fields[kind as Kind]!.push(...extras);
+fields.assessment!.find((f) => f.key === "type")!.options = [
+  "Skills",
+  "Work preferences",
+  "DISC",
+  "DOPE",
+];
 const titles: Partial<Record<Kind, string>> = {
   employee: "employee",
   department: "department",
@@ -330,10 +366,13 @@ function defaults(kind: Kind): Data {
               ? null
               : field.options?.[0] || null
             : field.type === "date"
-              ? field.key === "endDate"
-                ? null
-                : today
-              : field.type === "multi"
+              ? field.required ||
+                ["date", "effectiveDate", "dueDate", "anchorDate"].includes(
+                  field.key,
+                )
+                ? today
+                : null
+              : ["multi", "lines"].includes(field.type || "")
                 ? []
                 : "";
   if (kind === "employee")
@@ -346,10 +385,51 @@ function defaults(kind: Kind): Data {
       end: "18:00",
       days: [1, 2, 3, 4, 5],
       graceMinutes: 5,
+      rotationWeeks: 1,
+      activeWeeks: [1],
     });
   if (kind === "assessment")
     data.questions = [{ prompt: "", options: ["", ""], correctIndex: 0 }];
   if (kind === "meeting") data.actions = [];
+  if (kind === "employee")
+    Object.assign(data, {
+      epfCategory: "Manual",
+      taxScheme: "Manual",
+      hoursPerDay: 8,
+      eisEligible: true,
+      taxResident: true,
+    });
+  if (kind === "leave")
+    Object.assign(data, { hours: 1, startHour: 9, endDate: today });
+  if (kind === "payroll")
+    for (const key of [
+      "taxableNormal",
+      "taxableAdditional",
+      "epfWages",
+      "epfNormalWages",
+      "socsoWages",
+    ])
+      data[key] = null;
+  if (kind === "location")
+    Object.assign(data, { radius: 200, latitude: null, longitude: null });
+  if (kind === "lifecycle")
+    Object.assign(data, {
+      items: [
+        "Complete profile",
+        "Review documents",
+        "Issue or return equipment",
+      ].map((task) => ({ task, done: false, owner: "HR" })),
+    });
+  if (kind === "evaluation_template")
+    Object.assign(data, {
+      criteria: [
+        { title: "Delivery", weight: 50 },
+        { title: "Collaboration", weight: 50 },
+      ],
+    });
+  if (kind === "leave_type")
+    Object.assign(data, { paid: true, annualDays: 14, carryExpiryMonth: 3 });
+  if (kind === "claim_type") Object.assign(data, { receiptRequired: true });
   return data;
 }
 export function RecordForm({
@@ -368,6 +448,24 @@ export function RecordForm({
   const [employeeId, setEmployeeId] = useState(
     record?.employee_id || workspace.actor.employeeId || "",
   );
+  const [lineValues, setLineValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      (fields[kind] || [])
+        .filter((f) => f.type === "lines")
+        .map((f) => [
+          f.key,
+          ((record?.data[f.key] || defaults(kind)[f.key] || []) as unknown[])
+            .map((v) =>
+              f.itemKeys
+                ? f.itemKeys
+                    .map((k) => String((v as Data)[k] ?? ""))
+                    .join(" | ")
+                : String(v),
+            )
+            .join("\n"),
+        ]),
+    ),
+  );
   const [busy, setBusy] = useState(false),
     [uploading, setUploading] = useState(false);
   const staff = isStaff(workspace.actor),
@@ -381,21 +479,67 @@ export function RecordForm({
       (workspace.actor.role === "employee" ||
         record.employee_id === workspace.actor.employeeId);
   function change(key: string, value: unknown) {
-    setData((d) => ({ ...d, [key]: value }));
+    setData((d) => {
+      const next = { ...d, [key]: value };
+      if (kind === "claim") {
+        const policy = workspace.records.find((r) => r.id === next.claimTypeId);
+        if (policy && Number(policy.data.mileageRate) > 0)
+          next.amount =
+            Math.round(
+              Number(next.mileageKm || 0) *
+                Number(policy.data.mileageRate) *
+                100,
+            ) / 100;
+      }
+      return next;
+    });
   }
   async function save(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
     try {
-      await api(
+      const payload = { ...data };
+      for (const f of (fields[kind] || []).filter((f) => f.type === "lines"))
+        payload[f.key] = (lineValues[f.key] || "")
+          .split("\n")
+          .filter((v) => v.trim())
+          .map((v) => {
+            if (!f.itemKeys)
+              return f.key === "activeWeeks" ? Number(v.trim()) : v.trim();
+            const values = v.split("|").map((p) => p.trim());
+            return Object.fromEntries([
+              ...f.itemKeys.map((k, i) => [
+                k,
+                k === "weight" ? Number(values[i] || 1) : values[i] || null,
+              ]),
+              ...(f.key === "items"
+                ? [
+                    ["done", false],
+                    ["owner", "HR"],
+                  ]
+                : []),
+            ]);
+          });
+      const result = await api<{ invitationUrl?: string }>(
         record ? `/api/records/${kind}/${record.id}` : `/api/records/${kind}`,
         record
-          ? { data, updatedAt: record.updated_at }
-          : { data, employeeId: employeeId || null },
+          ? { data: payload, updatedAt: record.updated_at }
+          : { data: payload, employeeId: employeeId || null },
         record ? "PATCH" : "POST",
       );
       await refresh();
       toast.success(record ? "Changes saved" : "Record added");
+      if (result.invitationUrl)
+        toast.info("Employee invitation prepared", {
+          duration: 10000,
+          action: {
+            label: "Copy invite",
+            onClick: () =>
+              void navigator.clipboard
+                .writeText(result.invitationUrl!)
+                .then(() => toast.success("Invitation copied")),
+          },
+        });
       onClose();
     } catch (e) {
       toast.error((e as Error).message);
@@ -414,11 +558,13 @@ export function RecordForm({
         form,
       );
       const key =
-        kind === "claim"
-          ? "receiptId"
-          : kind === "candidate"
-            ? "resumeFileId"
-            : "fileId";
+        kind === "leave"
+          ? "evidenceId"
+          : kind === "claim"
+            ? "receiptId"
+            : kind === "candidate"
+              ? "resumeFileId"
+              : "fileId";
       setData((d) => ({
         ...d,
         [key]: result.id,
@@ -427,6 +573,36 @@ export function RecordForm({
           : {}),
       }));
       toast.success("Attachment saved");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+  async function readReceipt() {
+    if (!data.receiptId) return;
+    setUploading(true);
+    try {
+      const result = await api<{
+        suggestions: {
+          amount: number | null;
+          date: string | null;
+          merchant: string | null;
+        };
+      }>("/api/actions/receipt-ocr", { fileId: data.receiptId });
+      setData((d) => ({
+        ...d,
+        ...(result.suggestions.amount
+          ? { amount: result.suggestions.amount }
+          : {}),
+        ...(result.suggestions.date ? { date: result.suggestions.date } : {}),
+        ...(result.suggestions.merchant
+          ? { description: result.suggestions.merchant }
+          : {}),
+      }));
+      toast.success(
+        "Receipt suggestions filled in. Check each value before submitting.",
+      );
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -466,8 +642,23 @@ export function RecordForm({
         </DialogHeader>
         <form onSubmit={save}>
           <div className="record-form-grid">
-            {["leave", "claim", "goal"].includes(kind) &&
+            {[
+              "leave",
+              "claim",
+              "goal",
+              "document",
+              "asset",
+              "lifecycle",
+              "letter",
+              "overtime",
+              "time_off",
+              "attendance_correction",
+              "lateness",
+              "evaluation",
+              "goal_update",
+            ].includes(kind) &&
             !record &&
+            !(kind === "goal" && data.scope && data.scope !== "Individual") &&
             (staff ||
               (workspace.actor.role === "manager" && kind === "goal")) ? (
               <div className="form-field full">
@@ -506,7 +697,13 @@ export function RecordForm({
                       .filter((r) => r.kind === f.source && r.id !== record?.id)
                       .map((r) => ({
                         value: r.id,
-                        label: String(r.data.name || r.data.title),
+                        label: String(
+                          r.data.name ||
+                            r.data.title ||
+                            r.data.workDate ||
+                            r.data.description ||
+                            r.kind,
+                        ),
                       }))
                   : (f.options || []).map((v) => ({ value: v, label: v }));
                 return (
@@ -522,7 +719,19 @@ export function RecordForm({
                         ) : null}
                       </Label>
                     ) : null}
-                    {f.type === "textarea" ? (
+                    {f.type === "lines" ? (
+                      <Textarea
+                        id={id}
+                        rows={4}
+                        value={lineValues[f.key] || ""}
+                        onChange={(e) =>
+                          setLineValues((v) => ({
+                            ...v,
+                            [f.key]: e.target.value,
+                          }))
+                        }
+                      />
+                    ) : f.type === "textarea" ? (
                       <Textarea
                         id={id}
                         required={f.required}
@@ -604,15 +813,37 @@ export function RecordForm({
                         step={
                           f.type === "number" ? f.step || "0.01" : undefined
                         }
-                        value={String(data[f.key] ?? "")}
+                        value={
+                          f.type === "datetime-local" && data[f.key]
+                            ? new Date(String(data[f.key]))
+                                .toLocaleString("sv-SE")
+                                .replace(" ", "T")
+                                .slice(0, 16)
+                            : String(data[f.key] ?? "")
+                        }
                         onChange={(e) =>
                           change(
                             f.key,
                             f.type === "number"
-                              ? Number(e.target.value)
-                              : f.type === "date" && !e.target.value
+                              ? !e.target.value &&
+                                [
+                                  "taxableNormal",
+                                  "taxableAdditional",
+                                  "epfWages",
+                                  "epfNormalWages",
+                                  "socsoWages",
+                                  "latitude",
+                                  "longitude",
+                                ].includes(f.key)
                                 ? null
-                                : e.target.value,
+                                : Number(e.target.value)
+                              : f.type === "datetime-local"
+                                ? e.target.value
+                                  ? new Date(e.target.value).toISOString()
+                                  : null
+                                : f.type === "date" && !e.target.value
+                                  ? null
+                                  : e.target.value,
                           )
                         }
                       />
@@ -651,7 +882,9 @@ export function RecordForm({
                 </div>
               </div>
             ) : null}
-            {["claim", "candidate", "meeting"].includes(kind) ? (
+            {["claim", "candidate", "meeting", "document", "leave"].includes(
+              kind,
+            ) ? (
               <div className="form-field full">
                 <Label>Attachment</Label>
                 <label className="upload-field">
@@ -902,6 +1135,22 @@ export function RecordForm({
               </div>
             ) : null}
           </div>
+          {kind === "claim" && data.receiptId ? (
+            <div className="info-note">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={uploading}
+                onClick={() => void readReceipt()}
+              >
+                Read receipt
+              </Button>
+              <span>
+                Review suggested amount, date and merchant before submitting.
+              </span>
+            </div>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"

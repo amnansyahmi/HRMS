@@ -24,6 +24,8 @@ export default async function Page({
       ["Allowances", data.allowance],
       ["Overtime", data.overtime],
       ["Bonus", data.bonus],
+      ["Commission", data.commission],
+      ["Reimbursements", data.reimbursements],
     ],
     deductions = [
       ["EPF", data.epfEmployee],
@@ -31,6 +33,8 @@ export default async function Page({
       ["EIS", data.eisEmployee],
       ["PCB / income tax", data.pcb],
       ["Other deductions", data.otherDeduction],
+      ["Unpaid leave", data.unpaidDeduction],
+      ["Zakat", data.zakat],
     ];
   return (
     <div className="payslip-page">
@@ -106,7 +110,11 @@ export default async function Page({
                 </td>
                 <td>
                   <strong>
-                    {money(Number(data.gross) - Number(data.net))}
+                    {money(
+                      Number(data.gross) +
+                        Number(data.reimbursements || 0) -
+                        Number(data.net),
+                    )}
                   </strong>
                 </td>
               </tr>

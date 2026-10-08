@@ -14,7 +14,13 @@ export type Page =
   | "meetings"
   | "policies"
   | "assistant"
-  | "settings";
+  | "settings"
+  | "employee-files"
+  | "work-requests"
+  | "hr-policies"
+  | "reviews"
+  | "announcements"
+  | "payments";
 export interface WorkspaceContextValue {
   workspace: Workspace;
   refresh: () => Promise<void>;

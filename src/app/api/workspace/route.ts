@@ -1,16 +1,24 @@
 import { getActor, assertOrigin, audit } from "@/lib/auth";
-import { workspace } from "@/lib/hr";
+import { workspace, recordPage } from "@/lib/hr";
 import { companySettings } from "@/lib/schema";
 import { handle, fail } from "@/lib/errors";
 import { transaction } from "@/lib/db";
 import { jsonBody } from "@/lib/request";
 import { z } from "zod";
 export const runtime = "nodejs";
-export async function GET() {
+export async function GET(request: Request) {
   return handle(async () =>
-    Response.json(await workspace(await getActor()), {
-      headers: { "Cache-Control": "private, no-store" },
-    }),
+    Response.json(
+      new URL(request.url).searchParams.has("cursor")
+        ? await recordPage(
+            await getActor(),
+            new URL(request.url).searchParams.get("cursor"),
+          )
+        : await workspace(await getActor()),
+      {
+        headers: { "Cache-Control": "private, no-store" },
+      },
+    ),
   );
 }
 export async function PATCH(request: Request) {

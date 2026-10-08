@@ -1,4 +1,5 @@
 "use client";
+import { MeetingMedia } from "./meeting-media";
 import { useState } from "react";
 import {
   FileText,
@@ -16,7 +17,7 @@ import { api, shortDate } from "@/lib/client";
 import { toast } from "sonner";
 import { isStaff, type HRRecord } from "@/lib/types";
 export function MeetingsPage() {
-  const { workspace, edit, ask, refresh } = useWorkspace(),
+  const { workspace, edit, ask, refresh, act } = useWorkspace(),
     [search, setSearch] = useState(""),
     rows = workspace.records.filter(
       (r) =>
@@ -44,9 +45,11 @@ export function MeetingsPage() {
         title="Meeting notes"
         description="Keep the decisions, actions and context together."
         action={
-          <AddButton onClick={() => edit("meeting")}>
-            Add meeting notes
-          </AddButton>
+          isStaff(workspace.actor) ? (
+            <AddButton onClick={() => edit("meeting")}>
+              Add meeting notes
+            </AddButton>
+          ) : null
         }
       />
       <div className="table-toolbar">
@@ -55,9 +58,29 @@ export function MeetingsPage() {
           onChange={setSearch}
           placeholder="Search notes or action items…"
         />
-        <span className="muted-text">
-          Upload a transcript or add your notes.
-        </span>
+        {isStaff(workspace.actor) ? (
+          <Button variant="outline" asChild>
+            <label>
+              Import calendar
+              <input
+                className="sr-only"
+                type="file"
+                accept=".ics,text/calendar"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (file.size > 1000000)
+                    return toast.error("Calendar must be smaller than 1 MB");
+                  const result = (await act("calendar-import", {
+                    data: { calendar: await file.text() },
+                  })) as { created: number } | undefined;
+                  if (result)
+                    toast.success(`${result.created} meetings imported`);
+                }}
+              />
+            </label>
+          </Button>
+        ) : null}
       </div>
       <div className="meeting-list">
         {rows.map((r) => (
@@ -88,14 +111,17 @@ export function MeetingsPage() {
                   <Sparkles size={14} />
                   Summarize
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Edit ${r.data.title}`}
-                  onClick={() => edit("meeting", r)}
-                >
-                  <Pencil size={15} />
-                </Button>
+                {r.data.createdBy === workspace.actor.userId ||
+                workspace.actor.role === "owner" ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Edit ${r.data.title}`}
+                    onClick={() => edit("meeting", r)}
+                  >
+                    <Pencil size={15} />
+                  </Button>
+                ) : null}
               </div>
             </div>
             {r.data.summary ? (
@@ -124,6 +150,10 @@ export function MeetingsPage() {
                     <Checkbox
                       aria-label={`Complete ${a.task}`}
                       checked={a.done}
+                      disabled={
+                        r.data.createdBy !== workspace.actor.userId &&
+                        workspace.actor.role !== "owner"
+                      }
                       onCheckedChange={(v) => toggle(r, i, v === true)}
                     />
                     <span className={a.done ? "done" : ""}>{a.task}</span>
@@ -135,6 +165,7 @@ export function MeetingsPage() {
                 ))}
               </div>
             ) : null}
+            <MeetingMedia id={r.id} />
             <details className="transcript-details">
               <summary>View original notes</summary>
               <p>{String(r.data.transcript)}</p>

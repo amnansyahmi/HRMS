@@ -27,6 +27,7 @@ export function PayrollPage() {
     [tab, setTab] = useState("payroll"),
     [period, setPeriod] = useState(new Date().toISOString().slice(0, 7)),
     [year, setYear] = useState(new Date().getFullYear()),
+    [scope, setScope] = useState(""),
     [publishing, setPublishing] = useState(false),
     [busy, setBusy] = useState(false),
     staff = isStaff(workspace.actor),
@@ -37,8 +38,14 @@ export function PayrollPage() {
   async function generate() {
     setBusy(true);
     try {
-      const result = (await act("payroll-generate", { period })) as
-        { created: number } | undefined;
+      const result = (await act("payroll-generate", {
+        period,
+        ...(scope.startsWith("department:")
+          ? { departmentId: scope.slice(11) }
+          : scope
+            ? { employeeId: scope }
+            : {}),
+      })) as { created: number } | undefined;
       if (result)
         toastResult(
           result.created
@@ -76,6 +83,13 @@ export function PayrollPage() {
           ) : null
         }
       />
+      {staff ? (
+        <div className="info-note">
+          2026 calculation uses verified employee categories and TP1 / TP3
+          inputs. Review wage classifications, previous employment, reliefs and
+          special scheme approval before publishing.
+        </div>
+      ) : null}
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="payroll">
@@ -97,6 +111,34 @@ export function PayrollPage() {
                 onChange={(e) => setPeriod(e.target.value)}
               />
             </label>
+            {staff ? (
+              <select
+                className="native-select"
+                aria-label="Payroll scope"
+                value={scope}
+                onChange={(e) => setScope(e.target.value)}
+              >
+                <option value="">Whole company</option>
+                <optgroup label="Departments">
+                  {workspace.records
+                    .filter((r) => r.kind === "department")
+                    .map((r) => (
+                      <option key={r.id} value={"department:" + r.id}>
+                        {String(r.data.name)}
+                      </option>
+                    ))}
+                </optgroup>
+                <optgroup label="Employees">
+                  {workspace.records
+                    .filter((r) => r.kind === "employee")
+                    .map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {String(r.data.name)}
+                      </option>
+                    ))}
+                </optgroup>
+              </select>
+            ) : null}
             <div className="table-actions">
               {staff && rows.length ? (
                 <Button size="sm" variant="outline" asChild>
@@ -104,6 +146,33 @@ export function PayrollPage() {
                     <Download size={14} />
                     CSV
                   </a>
+                </Button>
+              ) : null}
+              {staff &&
+              rows.some(
+                (r) => r.data.status === "Published" && !r.data.voucherId,
+              ) ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const selected = rows.filter(
+                      (r) => r.data.status === "Published" && !r.data.voucherId,
+                    );
+                    void act(
+                      "voucher-prepare",
+                      {
+                        id: selected[0].id,
+                        data: {
+                          recordIds: selected.map((r) => r.id),
+                          title: "Payroll " + period,
+                        },
+                      },
+                      "Payment voucher prepared",
+                    );
+                  }}
+                >
+                  Prepare voucher
                 </Button>
               ) : null}
               {staff && drafts.length ? (
@@ -179,14 +248,29 @@ export function PayrollPage() {
                         </td>
                         <td>
                           {r.data.status === "Draft" ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => edit("payroll", r)}
-                            >
-                              <Pencil size={14} />
-                              Review
-                            </Button>
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  void act(
+                                    "payroll-calculate",
+                                    { id: r.id },
+                                    "Deductions calculated; review before publishing",
+                                  )
+                                }
+                              >
+                                Calculate statutory
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => edit("payroll", r)}
+                              >
+                                <Pencil size={14} />
+                                Review
+                              </Button>
+                            </>
                           ) : (
                             <Button asChild variant="outline" size="sm">
                               <a
@@ -218,9 +302,9 @@ export function PayrollPage() {
           )}{" "}
           {staff ? (
             <div className="info-note">
-              Statutory deductions are entered by HR from verified calculations.
-              New drafts start with zero deductions and must be reviewed before
-              publication.
+              Use Calculate statutory after verifying the employee profile, or
+              enter manually verified deductions. Every draft requires HR review
+              before publication.
             </div>
           ) : null}
         </TabsContent>

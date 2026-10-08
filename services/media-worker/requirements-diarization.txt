@@ -1,0 +1,2 @@
+# Optional local speaker diarization. Accept Community-1 model conditions first.
+pyannote.audio>=4.0,<5

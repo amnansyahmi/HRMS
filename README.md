@@ -1,12 +1,12 @@
 # Nonymauz People
 
-A focused HR workspace inspired by the Kuasa HIRA feature categories, using **ai-nonymauz-cloud** for AI. Built in the existing HRMS repository with Next.js, TypeScript, PostgreSQL, and shadcn/ui. The interface uses a quiet, ChatGPT-style sidebar, neutral colours, and a dedicated chat view.
+An HR workspace in the existing HRMS repository, inspired by Kuasa HIRA's HR feature categories and connected to **ai-nonymauz-cloud**. Next.js, React, TypeScript, PostgreSQL and shadcn/ui power a quiet, ChatGPT-style interface.
 
 ![HR workspace](docs/screenshots/overview-desktop.png)
 
 ## Start locally
 
-Requires Node.js 22 or newer.
+Use Node.js 22 or newer.
 
 ```bash
 npm ci
@@ -14,80 +14,76 @@ cp .env.example .env.local
 npm run dev
 ```
 
-On Windows PowerShell, use `Copy-Item .env.example .env.local` instead of `cp`.
+On Windows PowerShell, use `Copy-Item .env.example .env.local`. Open **http://localhost:3000** and click **Log in** to enter an isolated workspace containing fabricated records. Demo owner, HR, manager and employee views are available. Temporary demo access is enabled by default, including production; set `DEMO_MODE=false` to show only the real-workspace credential flow. Existing real workspaces still use passwords and their configured MFA.
 
-Open **http://localhost:3000**. Create a company account, or choose **Explore the demo workspace**. The demo includes fabricated records and owner, HR, manager, and employee views. It is available only when `DEMO_MODE=true` during local development; production and Vercel always reject demo login.
+Development uses persistent PGlite in `.data/hrms` when `DATABASE_URL` is unset. Production requires PostgreSQL and never silently falls back to local disk. Each anonymous demo browser gets a different company. Demo email delivery is suppressed, and live AI is blocked unless `DEMO_AI_ENABLED=true` is explicitly configured.
 
-Local development uses PostgreSQL-compatible **PGlite** persisted in `.data/hrms` when `DATABASE_URL` is unset. Restarting the app retains your local records. Production requires a real PostgreSQL `DATABASE_URL`; it never silently switches to ephemeral disk storage.
+## HR workflows
 
-## Features
+| Area | Behaviour |
+| --- | --- |
+| HRIS | Malaysian employee fields, dependants, education/employment history, private dated documents, equipment returns, onboarding links with required uploads and HR review, automatic employee invitations, atomic CSV imports, dated employment changes, printable letters and department announcements/read receipts. |
+| Attendance and leave | Phone clock-in/out, GPS geofences, recurring/rotating/overnight shifts, person/department assignment, state holiday records, custom entitlements, half-day/hourly leave, accrual/carry-forward, overtime/time-off, clock corrections and reviewed lateness reasons. |
+| Payroll | Company/department/person drafts, effective-date salary proration, approved unpaid leave and overtime at configured rates, claims in salary, allowances/bonus/commission, versioned Malaysian contributions and PCB, mandatory review, locked published payslips, vouchers and CSV exports. |
+| Claims | Custom types, annual/monthly/per-request limits, department eligibility, mileage rates, receipts and OCR suggestions, staged approval, balances and year-to-date reports, reimbursement separately or with salary. |
+| Recruitment | Public careers, screening questions, private parsed resumes, AI resume review, reusable job copies, dated stages/interviews, hired candidate → employee/checklist, and carried resume/assessment records. |
+| Assessments and goals | Candidate/employee skills tests, original DISC/DOPE reflection questionnaires and team profiles, reusable review cycles/templates, weighted final evaluations, historical score comparisons, company/team/individual goal links and four-perspective scorecards. |
+| People AI | Scoped HR, recruitment, resume, meeting and preference assistance; sourced records, private chat history, curated Employment Act references, per-assistant toggles and explicitly confirmed request/stage/letter actions. |
+| Meetings | Recording/audio upload, private chunked storage and playback, configured BM/English transcription, timestamped segments/flags, speaker labels/talk time, reviewed summaries/actions, selected-person sharing, employee linking and ICS import. |
 
-| HIRA category              | Implemented behaviour                                                                                                                                                                           |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Employees                  | Profiles, departments, reporting manager, employment status, salary and leave allowances; employee archive revokes linked access.                                                               |
-| Companies / departments    | Isolated company workspaces, membership-based switching, department directory.                                                                                                                  |
-| Attendance / shifts        | Server-timed clock-in/out, location, recurring and overnight shifts, grace period, daily attendance and worked hours.                                                                           |
-| Leave                      | Working-day calculation, company holidays, reserved pending balances, overlap checks, manager/HR review and cancellation.                                                                       |
-| Claims                     | Receipts, submission, review notes, approval and a separate mark-as-paid action.                                                                                                                |
-| Payroll / payslips         | Monthly draft generation, editable earnings and employee/employer deductions, mandatory review, immutable published snapshots, printable payslips and CSV.                                      |
-| EA / CP22 / CP22A          | Downloadable **preparation worksheets**. EA aggregates published annual payroll; CP22 lists starts; CP22A lists archived employees with end dates. These are not official forms or submissions. |
-| KPI / goals / evaluations  | Measurable targets, employee progress updates, due dates, manager feedback and ratings.                                                                                                         |
-| Meeting notes              | Notes/transcript import, summaries, named action items and completion tracking.                                                                                                                 |
-| AI HR assistant            | Permission-filtered company context, record sources, private conversation history and Malay/English responses.                                                                                  |
-| Job listings               | Draft / published / closed roles; published listings populate the public career portal.                                                                                                         |
-| Candidates                 | Applications, private resumes, notes and a manually managed hiring pipeline.                                                                                                                    |
-| Skills / preference tests  | Editable multiple-choice tests; one-use, expiring candidate links; answer keys stay on the server; invitations keep a snapshot of the original test.                                            |
-| Career portal              | Public company page, applications with text or PDF/DOCX/TXT resume and explicit recruitment consent.                                                                                            |
-| AI recruit assistant       | Job description and interview planning support using the company’s available job listings.                                                                                                      |
-| AI resume review           | Evidence-based skill scoring and gaps against a selected job’s requirements, plus interview questions; recruiters decide stages and hiring.                                                     |
-| AI work-preference summary | Summarises candidates’ voluntary questionnaire answers; no inferred personality from a resume or validated personality diagnosis.                                                               |
+See [HIRA-COVERAGE.md](docs/HIRA-COVERAGE.md) for the comparison sources and exact configuration/limits. Reflection questionnaires are original conversation aids, not validated psychological tests or automated hiring decisions.
 
-Company handbook, audit trail, account invitations, private attachments, CSV exports and mobile layouts are included.
+## Phones and PWA
+
+The phone layout has bottom navigation, safe-area spacing, larger touch controls, scroll-contained tables and 16px form inputs. The manifest, icons and service worker support **Add to Home Screen** on iPhone and **Install app** on Android. Viewport and gesture controls request fixed scale; operating-system accessibility settings may override zoom restrictions.
+
+Offline navigation displays a public reconnect screen. HR records, API responses, attachments and payslips are not put in Cache Storage. Submissions require an online connection. Recording needs HTTPS and microphone permission; keep the recording page open.
 
 ## Connect ai-nonymauz-cloud
 
-Set these **server-only** variables in `.env.local` or your hosting environment:
-
 ```dotenv
 AI_NONYMAUZ_BASE_URL=https://your-current-backend/v1
-AI_NONYMAUZ_API_KEY=your-backend-bearer-key
-AI_NONYMAUZ_MODEL=your-model-alias
+AI_NONYMAUZ_API_KEY=your-private-bearer-key
+AI_NONYMAUZ_MODEL=an-alias-returned-by-your-backend
 ```
 
-Use an alias actually returned by your backend’s `GET /v1/models`. The example alias `ai-nonymauz-fast` is configurable. Use the current deployed origin; this repository does not assume the old Render URL is still the correct deployment.
+The server calls `/v1/chat/completions` using the AI SDK's OpenAI-compatible adapter, bearer authentication, `use_rag=false`, `use_tools=false`, a bounded timeout and no automatic paid-generation retries. The owner must enable AI in Settings. Individual assistants and confirmed action cards have separate switches. API keys remain server-only.
 
-The adapter calls `/v1/chat/completions` through the AI SDK’s OpenAI-compatible provider and sends `Authorization: Bearer ...`. It explicitly supplies `use_rag=false` and `use_tools=false` so company questions use the supplied HR records rather than the backend’s general knowledge or web tools. It has a bounded timeout and does not retry a paid generation automatically.
+Records, resumes and transcripts are untrusted input. The model receives authorized context and may prepare a card; it cannot execute database writes. Confirmation rechecks actor, company, permissions, record version and expiry through the ordinary workflow. A card can be consumed only once. Replies show their supplied sources, which are a limited context snapshot. Recruitment AI uses explicit skills/experience; known candidate names and contacts are removed before resume review, but free text may still contain personal data. The configured backend/provider determines upstream data handling.
 
-The company owner must turn on **Settings → AI connection → Enable AI** before records are sent. API keys are never stored in browser variables. Record contents and transcripts are treated as untrusted input; there are no model-controlled write tools. Replies show the records supplied, which may be a limited context snapshot. Responses require human review.
+## Production and operations
 
-Recruitment consent includes the configured AI review. The server removes known candidate name, email and phone values before sending a resume for review, but free-text resumes may contain other personal information. Your ai-nonymauz-cloud model provider configuration still determines how upstream providers handle submitted data.
+1. Configure PostgreSQL `DATABASE_URL` and the exact canonical `APP_URL`. Origin checks protect mutations; previews also need their own correct origin.
+2. Keep `DEMO_MODE=true` while testing the requested bypass; use `false` for credential-only entry. Configure AI if wanted.
+3. Set SMTP variables and `EMAIL_FROM` for verification/reset/invitation delivery. `EMAIL_NOTIFICATIONS=true` also queues workflow/reminder email.
+4. Generate a private `AUTH_ENCRYPTION_KEY` for encrypted TOTP MFA. MFA has replay protection and ten one-use recovery codes; enabling it revokes other sessions.
+5. Schedule authenticated `GET /api/cron` calls with `CRON_SECRET`, for example every five minutes. This flushes the email outbox, creates deduplicated document/clock reminders, applies scheduled employment changes and expires stale jobs/tokens. Cron deployment/scheduling is external to this repository.
+6. Run `npm run db:migrate`, `npm run build` and `npm start`, or use your Next.js hosting workflow. `GET /api/health` checks database availability.
+7. Deploy the optional [media worker](services/media-worker/README.md) and set its URL/key for transcription and receipt OCR. Local OCR can instead use `OCR_ENABLED=true` and installed Tesseract.
 
-## Access model
+Schema initialization is idempotent and also runs on first database use. PostgreSQL transactions lock company/workflow records. Passwords use salted scrypt; sessions use opaque hashed tokens in HttpOnly cookies, with Secure cookies in production. Company scope, roles, optimistic edits, persistent rate limits and private attachment checks are enforced server-side. Managers see their direct team; employees see their own workflows/payslips and a redacted directory. Meetings are private to their recorder/owner and selected shared employees.
 
-| Role     | Access                                                                                                            |
-| -------- | ----------------------------------------------------------------------------------------------------------------- |
-| Owner    | HR workflows, company settings, AI opt-in, account invitations and access removal.                                |
-| HR       | Employee management, company HR workflows, payroll, hiring, meeting notes and handbook.                           |
-| Manager  | Their direct team’s attendance, leave, claims and goals; approval of team requests; their own published payslips. |
-| Employee | Own requests, attendance, goals and published payslips, plus a redacted directory and handbook.                   |
+Each normal upload/chunk is capped at approximately 2 MB; company storage defaults to 100 MB. Audio is uploaded in sequential private chunks, with at most three hours per combined meeting. Workspace records use keyset pagination; the client loads every page before displaying the refreshed workspace. Attachments currently live in PostgreSQL. Keep backups and monitor database/storage capacity.
 
-An employee/manager account must be linked to an employee profile with the same email. Owners can link accounts in Settings. Invitations are copied and shared manually; the app does not send emails or messages. Request creators cannot approve their own requests, including an owner identified by their employee email. Public application and assessment routes expose only their intended public fields.
+## Payroll scope
 
-## Production configuration
+HR must verify employee categories, eligibility, taxable wages, contribution wages, previous-employer figures and reliefs before automatic calculation. The checked-in source schedules and SHA-256 hashes are in `src/lib/data/malaysia-statutory.json`: EPF effective October 2025, EIS ceiling effective October 2024, SOCSO/SKBBK 2026 and PCB 2026. Automatic payroll is deliberately restricted to documented 2026 cases. Manual/unsupported profiles, other tax years and transitional cases need independently verified amounts.
 
-1. Provision PostgreSQL and set `DATABASE_URL` using its serverless/pool connection string where applicable.
-2. Set `APP_URL` to the exact application origin, such as `https://hr.example.com`. Mutations validate their Origin header; configure the correct origin for each preview environment too.
-3. Set the three AI variables above and `DEMO_MODE=false`.
-4. Run `npm run db:migrate`, then `npm run build` and `npm start`, or connect the repository to your Next.js host.
-5. Create the owner account, add employee profiles, and generate invitations from Settings.
+The engine includes EPF Parts A/C/E/F, scheduled SOCSO/EIS, standard resident PCB, non-resident treatment and explicit selected special tax schemes. It handles additional remuneration and zakat offsets. Eligibility is an HR-reviewed profile choice, not inferred certification. Rest-day ordinary pay and any lateness adjustment remain HR-reviewed inputs; the payroll note includes attendance lateness for review. HR configures the applicable national/state holidays and employment terms.
 
-The schema is idempotent and also initialises on first database use. PostgreSQL migration and workflow transactions use locks. Sessions are opaque, hashed in the database and placed in HttpOnly cookies; production uses Secure cookies. Passwords use Node’s scrypt with per-password salts. Queries are parameterised and company-scoped. Origin checks, database-backed rate limits, attachment access checks and optimistic edits are enforced server-side.
+**This software has not received LHDN payroll approval.** Validate against official employer cases before processing real wages. EA/CP22/CP22A downloads are clearly labelled preparation worksheets, not completed official forms or submissions. Payment vouchers record an actual bank transfer reference; the app does not initiate transfers or submit to statutory bodies. Use the current official employer forms and submission portals.
 
-Uploads are stored privately in PostgreSQL with a default **2 MB per file** and **100 MB per company** quota. PDF/DOCX/TXT extraction supplies resume and transcript text; scanned PDFs need pasted text because OCR is not included. Receipt images are stored for reviewers, without automatic OCR. Meeting audio recording/transcription is not included. These limits can be configured through the documented environment variables, although the upload endpoint deliberately caps each request at approximately 2 MB.
+## Encrypted backup and restore
 
-Payroll deductions and any salary proration must be calculated and verified by HR. Draft amounts are not a Malaysian statutory calculation engine. EA worksheets summarise the available published payroll amounts, not every EA classification or benefit-in-kind field. Complete the current official employer form and submit through [MyTax](https://mytax.hasil.gov.my/) following [HASiL employer guidance](https://www.hasil.gov.my/majikan/tanggungjawab-majikan/).
+Set a separate 32-byte hexadecimal `BACKUP_ENCRYPTION_KEY`, then:
 
-The current workspace screen loads the latest 2,000 records and explicitly reports truncation. CSV exports query all applicable records. Add server pagination and a scalable file store before using this initial workspace at a substantially larger scale. This initial release has no SSO, email delivery, password-reset mail, bank transfers, or statutory e-filing integration.
+```bash
+node --import tsx scripts/backup.mts backup .backups/hrms.nphr
+# Point DATABASE_URL (or local HRMS_DATA_DIR) at a separate, empty restore target.
+node --import tsx scripts/backup.mts restore .backups/hrms.nphr --empty-database-only
+```
+
+Backups encrypt the consistent database snapshot and private file bytes with AES-256-GCM. Restore refuses a populated target, restores record relationships and revokes sessions/reset tokens. Preserve the original `AUTH_ENCRYPTION_KEY` separately for restored MFA. Review the restored email outbox before restarting delivery. Keep encrypted backups off the application host; an external scheduler/storage policy is needed for recurring backups.
 
 ## Verification
 
@@ -100,17 +96,8 @@ npx playwright install --with-deps chromium
 npm run verify:ui
 ```
 
-The database integration suite verifies isolation, invitations, approvals, attendance, payroll, assessment snapshots, file authorisation, CSV escaping and the ai-nonymauz-cloud request contract. AI tests mock the upstream endpoint; a live AI smoke test requires your actual credentials and model availability.
+Tests exercise isolated database workflows, tenant boundaries, employee invitations, staged approvals and limits, onboarding/files, effective salaries, payments, evaluation snapshots, AI confirmation, private audio callbacks, MFA/reset, statutory boundaries and encrypted backup restoration. Upstream AI is mocked; live AI, SMTP and speech models require configured credentials/services.
 
-The browser runner starts an isolated local server with fabricated records, exercises desktop and mobile workflows, and checks public applications, assessments, payroll publication and employee isolation. It uses Playwright Chromium; install it with the command above, or set `CHROMIUM_PATH` to an installed compatible browser. Test data is temporary and removed after the run.
+The browser runner starts an isolated development server with fabricated data and covers desktop/phone flows, public careers/assessments, payroll publication, employee isolation, onboarding review and public-only PWA offline caching. Set `CHROMIUM_PATH` to a compatible installed Chromium if needed. Screenshots and verification results are in `docs/screenshots/`.
 
-## Project layout
-
-- `src/app` — pages and authenticated/public API routes.
-- `src/components` — HR screens and official-source shadcn/ui primitives.
-- `src/lib` — database, validation, permissions, workflows and AI adapter.
-- `tests` — database integration tests.
-- `scripts` — schema migration and browser verification.
-- `docs` — implementation notes and screenshots.
-
-Third-party shadcn/ui component source is distributed under its MIT licence; see `THIRD_PARTY_NOTICES.md`.
+Third-party shadcn/ui source retains its MIT licence in `THIRD_PARTY_NOTICES.md`.

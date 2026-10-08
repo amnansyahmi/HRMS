@@ -1,6 +1,7 @@
 export const migration = `
 CREATE TABLE IF NOT EXISTS users (id uuid PRIMARY KEY, name text NOT NULL, email text NOT NULL UNIQUE, password_hash text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS companies (id uuid PRIMARY KEY, name text NOT NULL, slug text NOT NULL UNIQUE, settings jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS hr_records (id uuid PRIMARY KEY, company_id uuid NOT NULL REFERENCES companies(id), kind text NOT NULL, employee_id uuid, data jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE(company_id, id), FOREIGN KEY(company_id, employee_id) REFERENCES hr_records(company_id, id));
 CREATE TABLE IF NOT EXISTS memberships (user_id uuid NOT NULL REFERENCES users(id), company_id uuid NOT NULL REFERENCES companies(id), role text NOT NULL CHECK(role IN ('owner','hr','manager','employee')), employee_id uuid, PRIMARY KEY(user_id, company_id), UNIQUE(company_id, employee_id), FOREIGN KEY(company_id, employee_id) REFERENCES hr_records(company_id, id));
 CREATE TABLE IF NOT EXISTS sessions (token_hash text PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), company_id uuid NOT NULL REFERENCES companies(id), expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
@@ -9,6 +10,20 @@ CREATE TABLE IF NOT EXISTS audit_log (id uuid PRIMARY KEY, company_id uuid NOT N
 CREATE TABLE IF NOT EXISTS files (id uuid PRIMARY KEY, company_id uuid NOT NULL REFERENCES companies(id), uploaded_by uuid REFERENCES users(id), filename text NOT NULL, mime text NOT NULL, bytes bytea NOT NULL, size int NOT NULL, extracted_text text NOT NULL DEFAULT '', created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS rate_limits (key text PRIMARY KEY, window_start timestamptz NOT NULL, count int NOT NULL);
 CREATE TABLE IF NOT EXISTS ai_messages (id uuid PRIMARY KEY, company_id uuid NOT NULL REFERENCES companies(id), user_id uuid NOT NULL REFERENCES users(id), thread_id uuid NOT NULL, role text NOT NULL, content text NOT NULL, sources jsonb NOT NULL DEFAULT '[]', created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at timestamptz;
+CREATE TABLE IF NOT EXISTS notifications(id uuid PRIMARY KEY,company_id uuid REFERENCES companies(id),user_id uuid REFERENCES users(id),title text NOT NULL,body text NOT NULL,href text NOT NULL,read_at timestamptz,created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dedupe_key text UNIQUE;
+CREATE INDEX IF NOT EXISTS notifications_reader ON notifications(company_id,user_id,created_at);
+CREATE TABLE IF NOT EXISTS email_outbox(id uuid PRIMARY KEY,company_id uuid REFERENCES companies(id),recipient text NOT NULL,subject text NOT NULL,body text NOT NULL,dedupe_key text UNIQUE,status text NOT NULL DEFAULT 'Pending',attempts int NOT NULL DEFAULT 0,available_at timestamptz NOT NULL DEFAULT now(),last_error text,created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS account_tokens(token_hash text PRIMARY KEY,user_id uuid NOT NULL REFERENCES users(id),purpose text NOT NULL,expires_at timestamptz NOT NULL,used_at timestamptz);
+CREATE TABLE IF NOT EXISTS user_mfa(user_id uuid PRIMARY KEY REFERENCES users(id),secret text NOT NULL,enabled boolean NOT NULL DEFAULT false,last_step bigint NOT NULL DEFAULT -1,recovery_hashes jsonb NOT NULL DEFAULT '[]');
+CREATE TABLE IF NOT EXISTS onboarding_links(id uuid PRIMARY KEY,company_id uuid REFERENCES companies(id),employee_id uuid NOT NULL,token_hash text UNIQUE NOT NULL,required_documents jsonb NOT NULL DEFAULT '[]',proposed_data jsonb NOT NULL DEFAULT '{}',status text NOT NULL DEFAULT 'Draft',expires_at timestamptz NOT NULL,submitted_at timestamptz,FOREIGN KEY(company_id,employee_id) REFERENCES hr_records(company_id,id));
+CREATE TABLE IF NOT EXISTS announcement_reads(announcement_id uuid REFERENCES hr_records(id),user_id uuid REFERENCES users(id),read_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(announcement_id,user_id));
+CREATE TABLE IF NOT EXISTS media_jobs(id uuid PRIMARY KEY,company_id uuid REFERENCES companies(id),meeting_id uuid REFERENCES hr_records(id),status text NOT NULL DEFAULT 'Pending',callback_hash text NOT NULL,audio_ids jsonb NOT NULL,language text NOT NULL DEFAULT 'auto',result jsonb NOT NULL DEFAULT '{}',error text,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS audio_uploads(id uuid PRIMARY KEY,company_id uuid REFERENCES companies(id),meeting_id uuid REFERENCES hr_records(id),user_id uuid REFERENCES users(id),total_parts int NOT NULL,duration numeric NOT NULL,mime text NOT NULL,filename text NOT NULL,parts jsonb NOT NULL DEFAULT '[]',status text NOT NULL DEFAULT 'Pending',created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS ai_proposals(id uuid PRIMARY KEY,company_id uuid REFERENCES companies(id),user_id uuid REFERENCES users(id),payload jsonb NOT NULL,status text NOT NULL DEFAULT 'Pending',expires_at timestamptz NOT NULL);
+CREATE INDEX IF NOT EXISTS outbox_pending ON email_outbox(status,available_at);
+CREATE INDEX IF NOT EXISTS onboarding_employee ON onboarding_links(company_id,employee_id);
 CREATE INDEX IF NOT EXISTS records_company_kind ON hr_records(company_id, kind);
 CREATE INDEX IF NOT EXISTS records_employee ON hr_records(company_id, employee_id);
 CREATE INDEX IF NOT EXISTS session_expiry ON sessions(expires_at);
@@ -19,4 +34,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_open_attendance ON hr_records(company_id, 
 CREATE UNIQUE INDEX IF NOT EXISTS attendance_day ON hr_records(company_id, employee_id, (data->>'workDate')) WHERE kind='attendance';
 CREATE UNIQUE INDEX IF NOT EXISTS payroll_period ON hr_records(company_id, employee_id, (data->>'period')) WHERE kind='payroll';
 CREATE UNIQUE INDEX IF NOT EXISTS candidate_job_email ON hr_records(company_id, (data->>'jobId'), (data->>'email')) WHERE kind='candidate';
+
+CREATE INDEX IF NOT EXISTS hr_records_page_idx ON hr_records(company_id,created_at DESC,id);
 `;

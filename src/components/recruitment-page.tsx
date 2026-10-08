@@ -1,4 +1,5 @@
 "use client";
+import { HireButton, CandidateDetails } from "./hiring-actions";
 import { useState } from "react";
 import {
   BriefcaseBusiness,
@@ -21,7 +22,7 @@ import {
   NativeSelect,
 } from "./common";
 export function RecruitmentPage() {
-  const { workspace, edit, ask } = useWorkspace(),
+  const { workspace, edit, ask, act } = useWorkspace(),
     [tab, setTab] = useState("jobs"),
     [search, setSearch] = useState(""),
     [stage, setStage] = useState("All"),
@@ -105,6 +106,15 @@ export function RecruitmentPage() {
                     {candidates.filter((c) => c.data.jobId === j.id).length}{" "}
                     candidates
                   </small>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void act("job-clone", { id: j.id }, "Job template copied")
+                    }
+                  >
+                    Copy template
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon"
@@ -219,6 +229,10 @@ export function RecruitmentPage() {
                                 <Paperclip size={15} />
                               </a>
                             </Button>
+                          ) : null}
+                          <CandidateDetails candidate={c} />
+                          {["Offer", "Hired"].includes(String(c.data.stage)) ? (
+                            <HireButton candidate={c} />
                           ) : null}
                           <Button
                             variant="ghost"

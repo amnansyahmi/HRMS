@@ -5,5 +5,8 @@
   "assessmentSubmission": true,
   "payrollPublication": true,
   "employeeIsolation": true,
+  "onboardingReview": true,
+  "extendedScreens": true,
+  "pwaPublicOfflineCache": true,
   "browserErrors": []
 }
