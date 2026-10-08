@@ -499,7 +499,7 @@ export async function createRecord(actor: Actor, kind: Kind, input: unknown) {
         actor,
         `New ${kind.replaceAll("_", " ")} request`,
         `${actor.name} submitted a request.`,
-        `/?view=${kind === "leave" ? "leave" : kind === "claim" ? "claims" : "time"}`,
+        "/?view=approvals",
         employeeId!,
         true,
       );
@@ -570,6 +570,7 @@ export async function updateRecord(
         "job_history",
         "payment_voucher",
         "payroll_run",
+        "profile_change",
         ...requestKinds,
       ].includes(kind)
     )
@@ -1012,7 +1013,7 @@ export async function reviewRequest(actor: Actor, input: unknown) {
       actor,
       `${body.decision} ${current.kind.replaceAll("_", " ")}`,
       body.note || "Your request was reviewed.",
-      `/?view=${current.kind === "leave" ? "leave" : current.kind === "claim" ? "claims" : "time"}`,
+      `/?view=${current.kind === "leave" ? "leave" : current.kind === "claim" ? "claims" : "work-requests"}`,
       employee.id,
     );
     await audit(tx, actor, `${body.decision} ${current.kind}`, current.id);

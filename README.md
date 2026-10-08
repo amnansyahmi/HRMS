@@ -79,6 +79,16 @@ Owners configure payroll grants in Settings. Existing HR memberships retain thei
 
 Owners can add employee status labels and types. Status labels map to Active, Onboarding or Archived behaviour; archived labels revoke employee access through the normal archive workflow. In-use labels cannot be removed or remapped through global settings. Designations are reusable templates for the job title when selected; later designation edits do not silently rewrite employee history. Returned claims require a correction reason, retain the same ID and history, recheck policy/file permissions and restart approval when the claimant resubmits.
 
+## Daily workspace tools
+
+- **Approval inbox:** leave, claims, overtime, time off, clock corrections, lateness, goal progress and contact changes share a filterable inbox. “Needs my review” reflects the reporting manager/HR step and excludes self approval. Each decision shows the request, note and any attachment before confirmation, and rechecks the record version on the server.
+- **My profile:** linked employees request changes to phone, address and emergency contacts. HR reviews the before/after fields; requests remain private to that employee and HR. Only one request can be pending. HR cannot approve their own change. Approval refuses to overwrite a field changed by HR after submission, while retaining unrelated HR edits. Banking, identity, salary and employment terms stay in the staff employee editor.
+- **Team calendar:** desktop month view and phone agenda combine approved leave/time off, configured holidays and rotating shifts. Managers see their direct team, employees their own calendar, and HR the workspace. Pending events are optional in the screen and excluded from ICS downloads. Exports omit request reasons, medical leave types and attachments; they are static files, not calendar subscriptions or live synchronization. Export ranges are limited to 62 days. Conventional half-day times remain subject to the documented shift limits.
+- **Notifications:** opening an update marks that individual notification as read; other unread updates remain in the inbox.
+- **Deployment setup:** the owner’s Settings tab checks required configuration presence/format without displaying credentials. Database connectivity is checked independently. The status does not prove SMTP delivery, scheduler operation, backups or live AI/worker availability. Missing or invalid `APP_URL` produces a setup message at login. In Vercel, set `APP_URL` to the exact HTTPS site address (no page path), scope it to the relevant environment and redeploy. Preview deployments need their own matching address.
+
+Annual preparation worksheets distinguish published months from published runs and include commissions, zakat and reimbursements. They retain their worksheet-only status and require employer review.
+
 ## Encrypted backup and restore
 
 Set a separate 32-byte hexadecimal `BACKUP_ENCRYPTION_KEY`, then:
@@ -104,6 +114,6 @@ npm run verify:ui
 
 Tests exercise isolated database workflows, tenant boundaries, employee invitations, staged approvals and limits, onboarding/files, effective salaries, payments, evaluation snapshots, AI confirmation, private audio callbacks, MFA/reset, statutory boundaries and encrypted backup restoration. Upstream AI is mocked; live AI, SMTP and speech models require configured credentials/services.
 
-The browser runner starts an isolated development server with fabricated data and covers desktop/phone flows, public careers/assessments, payroll publication, employee isolation, onboarding review, equipment returns, corrected claim resubmission, dated weekly payroll, configurable employee labels/designations, specialist controls and public-only PWA offline caching. Set `CHROMIUM_PATH` to a compatible installed Chromium if needed. Screenshots and verification results are in `docs/screenshots/`.
+The browser runner starts an isolated development server with fabricated data and covers desktop/phone flows, public careers/assessments, payroll publication, employee isolation, onboarding review, equipment returns, corrected claim resubmission, dated weekly payroll, configurable employee labels/designations, specialist controls, approval inbox decisions, private calendar downloads, phone contact updates with HR review, owner setup diagnostics and public-only PWA offline caching. Set `CHROMIUM_PATH` to a compatible installed Chromium if needed. Screenshots and verification results are in `docs/screenshots/`.
 
 Third-party shadcn/ui source retains its MIT licence in `THIRD_PARTY_NOTICES.md`.

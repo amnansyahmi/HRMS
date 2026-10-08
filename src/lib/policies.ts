@@ -4,15 +4,8 @@ import { type DB } from "./db";
 import { fail } from "./errors";
 import { workingDays, localDate } from "./calculations";
 import type { Actor, Data, HRRecord } from "./types";
-export const requestKinds = [
-  "leave",
-  "claim",
-  "overtime",
-  "time_off",
-  "attendance_correction",
-  "lateness",
-  "goal_update",
-];
+export { requestKinds } from "./request-workflow";
+import { requestKinds } from "./request-workflow";
 export const employeeKinds = [
   ...requestKinds,
   "goal",

@@ -6,19 +6,22 @@ import {
   BriefcaseBusiness,
   ArrowRight,
   MessageSquare,
-  Check,
   Receipt,
   ArrowUpRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspace } from "./workspace-context";
 import { PageHeader, Person, Status, Empty, InlineLink } from "./common";
-import { money, shortDate } from "@/lib/client";
+import { shortDate } from "@/lib/client";
 import { localDate } from "@/lib/calculations";
-import { isStaff } from "@/lib/types";
+import { isStaff, type HRRecord } from "@/lib/types";
+import { useState } from "react";
+import { requestKinds, reviewOptions } from "@/lib/request-workflow";
+import { RequestSummary, RequestReviewDialog } from "./request-review";
 export function OverviewPage() {
-  const { workspace, go, edit, ask, act } = useWorkspace(),
+  const { workspace, go, edit, ask } = useWorkspace(),
     { records, actor, company } = workspace;
+  const [review, setReview] = useState<HRRecord | null>(null);
   const employees = records.filter(
       (r) => r.kind === "employee" && r.data.status !== "Archived",
     ),
@@ -27,7 +30,13 @@ export function OverviewPage() {
       (r) => r.kind === "attendance" && r.data.workDate === today,
     ),
     pending = records.filter(
-      (r) => ["leave", "claim"].includes(r.kind) && r.data.status === "Pending",
+      (r) =>
+        [...requestKinds, "profile_change"].includes(r.kind) &&
+        r.data.status === "Pending" &&
+        (r.employee_id === actor.employeeId ||
+          reviewOptions(actor, r, records).some((o) =>
+            ["Approved", "Rejected", "Returned"].includes(o),
+          )),
     ),
     jobs = records.filter(
       (r) => r.kind === "job" && r.data.status === "Published",
@@ -57,9 +66,9 @@ export function OverviewPage() {
     {
       label: "Pending requests",
       value: pending.length,
-      detail: "Leave and expense claims",
+      detail: "Requests awaiting a decision",
       icon: CalendarDays,
-      page: "leave" as const,
+      page: "approvals" as const,
     },
     ...(staff
       ? [
@@ -125,6 +134,17 @@ export function OverviewPage() {
           <ArrowUpRight size={15} />
         </Button>
       </section>
+      <div className="profile-links overview-shortcuts">
+        <Button variant="outline" onClick={() => go("approvals")}>
+          Approval inbox
+        </Button>
+        <Button variant="outline" onClick={() => go("calendar")}>
+          Team calendar
+        </Button>
+        <Button variant="outline" onClick={() => go("my-profile")}>
+          My profile
+        </Button>
+      </div>
       <div className="overview-columns">
         <section className="panel">
           <div className="panel-heading">
@@ -135,7 +155,7 @@ export function OverviewPage() {
                 {pending.length === 1 ? "request" : "requests"}
               </p>
             </div>
-            <InlineLink onClick={() => go("leave")}>View all</InlineLink>
+            <InlineLink onClick={() => go("approvals")}>View all</InlineLink>
           </div>
           {pending.length ? (
             <div className="request-list">
@@ -151,25 +171,18 @@ export function OverviewPage() {
                   <div>
                     <strong>{employeeName(r.employee_id)}</strong>
                     <small>
-                      {r.kind === "leave"
-                        ? `${r.data.type} leave · ${r.data.days} day(s) · ${shortDate(r.data.startDate)}`
-                        : `${r.data.category} claim · ${money(r.data.amount)}`}
+                      <RequestSummary record={r} />
                     </small>
                   </div>
-                  {canReview && r.employee_id !== actor.employeeId ? (
+                  {reviewOptions(actor, r, records).some((o) =>
+                    ["Approved", "Rejected", "Returned"].includes(o),
+                  ) ? (
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() =>
-                        act(
-                          "review",
-                          { id: r.id, decision: "Approved" },
-                          "Request approved",
-                        )
-                      }
+                      onClick={() => setReview(r)}
                     >
-                      <Check size={13} />
-                      Approve
+                      Review
                     </Button>
                   ) : (
                     <Status value={r.data.status} />
@@ -265,6 +278,13 @@ export function OverviewPage() {
           />
         )}
       </section>
+      {review ? (
+        <RequestReviewDialog
+          key={review.id}
+          record={review}
+          onClose={() => setReview(null)}
+        />
+      ) : null}
     </>
   );
 }

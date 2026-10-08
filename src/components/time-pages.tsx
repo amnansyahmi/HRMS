@@ -1,4 +1,5 @@
 "use client";
+import { reviewOptions, approvalStage } from "@/lib/request-workflow";
 import { leaveEntitlement } from "@/lib/leave-entitlement";
 import { toast } from "sonner";
 import { ShiftRoster } from "./shift-roster";
@@ -315,9 +316,10 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
     [busy, setBusy] = useState(false),
     employees = workspace.records.filter((r) => r.kind === "employee"),
     staff = isStaff(workspace.actor),
-    canReview = staff || workspace.actor.role === "manager",
     own = workspace.records.find((r) => r.id === workspace.actor.employeeId),
-    year = new Date().getFullYear();
+    year = Number(
+      localDate(new Date(), workspace.company.settings.timezone).slice(0, 4),
+    );
   const employeeName = (id: string | null) =>
       String(employees.find((e) => e.id === id)?.data.name || "Employee"),
     all = workspace.records.filter((r) => r.kind === kind),
@@ -353,7 +355,12 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
     try {
       const result = await act(
         "review",
-        { id: review.record.id, decision: review.decision, note },
+        {
+          id: review.record.id,
+          expectedUpdatedAt: review.record.updated_at,
+          decision: review.decision,
+          note,
+        },
         `Request ${review.decision.toLowerCase()}`,
       );
       if (result) setReview(null);
@@ -565,6 +572,11 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                   r.employee_id === workspace.actor.employeeId ||
                   employees.find((e) => e.id === r.employee_id)?.data.email ===
                     workspace.actor.email;
+                const options = reviewOptions(
+                  workspace.actor,
+                  r,
+                  workspace.records,
+                );
                 return (
                   <tr key={r.id}>
                     <td>
@@ -623,6 +635,11 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                     </td>
                     <td>
                       <Status value={r.data.status} />
+                      {r.data.status === "Pending" ? (
+                        <small className="cell-detail">
+                          {approvalStage(r, workspace.records)}
+                        </small>
+                      ) : null}
                     </td>
                     <td>
                       <div className="table-actions">
@@ -636,7 +653,7 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                             </a>
                           </Button>
                         ) : null}
-                        {r.data.status === "Pending" && canReview && !self ? (
+                        {options.includes("Approved") ? (
                           <>
                             <Button
                               variant="outline"
@@ -663,10 +680,22 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                             </Button>
                           </>
                         ) : null}
+                        {options.includes("Rejected") &&
+                        !options.includes("Approved") ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setReview({ record: r, decision: "Rejected" });
+                              setNote("");
+                            }}
+                          >
+                            Reject
+                          </Button>
+                        ) : null}
                         {kind === "claim" &&
                         r.data.status === "Pending" &&
-                        canReview &&
-                        !self ? (
+                        options.includes("Returned") ? (
                           <Button
                             variant="outline"
                             size="sm"
@@ -703,7 +732,7 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                         ) : null}
                         {kind === "claim" &&
                         r.data.status === "Approved" &&
-                        hasPayroll(workspace.actor, "pay") ? (
+                        options.includes("Paid") ? (
                           <Button
                             variant="outline"
                             size="sm"

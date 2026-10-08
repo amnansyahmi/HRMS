@@ -1,6 +1,7 @@
 "use client";
 import { PayrollAccessControl, SpecialistControls } from "./workflow-settings";
 import { SecuritySettings } from "./security-page";
+import { SetupStatus } from "./setup-status";
 import { useState } from "react";
 import {
   Save,
@@ -267,6 +268,9 @@ export function SettingsPage() {
           <TabsTrigger value="security">Account security</TabsTrigger>
           {owner ? <TabsTrigger value="access">Team access</TabsTrigger> : null}
           <TabsTrigger value="ai">AI connection</TabsTrigger>
+          {owner ? (
+            <TabsTrigger value="setup">Deployment setup</TabsTrigger>
+          ) : null}
           {owner ? <TabsTrigger value="activity">Activity</TabsTrigger> : null}
         </TabsList>
         <TabsContent value="security">
@@ -584,6 +588,11 @@ export function SettingsPage() {
             )}
           </section>
         </TabsContent>
+        {owner ? (
+          <TabsContent value="setup">
+            <SetupStatus />
+          </TabsContent>
+        ) : null}
         <TabsContent value="activity">
           <section className="settings-section">
             <h2>Recent activity</h2>
