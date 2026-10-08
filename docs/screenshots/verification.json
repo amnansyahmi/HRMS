@@ -1,0 +1,9 @@
+{
+  "desktop": true,
+  "mobile": true,
+  "publicApplications": true,
+  "assessmentSubmission": true,
+  "payrollPublication": true,
+  "employeeIsolation": true,
+  "browserErrors": []
+}
