@@ -148,9 +148,9 @@ export const extendedFields: Partial<Record<Kind, Field[]>> = {
   ],
   asset: [
     text("name", "Equipment"),
-    text("serialNo", "Serial number"),
-    date("issuedOn", "Issued on"),
-    date("returnedOn", "Returned on"),
+    { ...text("serial", "Serial number"), required: true },
+    { ...date("issuedDate", "Issued on"), required: true },
+    date("returnedDate", "Returned on"),
     select("condition", "Condition", ["Good", "Needs repair", "Returned"]),
     area("notes", "Notes"),
   ],

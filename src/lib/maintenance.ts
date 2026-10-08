@@ -1,3 +1,4 @@
+import { leavePortion } from "./policies";
 import { randomUUID } from "node:crypto";
 import { db, transaction } from "./db";
 import { flushEmails, queueEmail } from "./notifications";
@@ -121,6 +122,82 @@ export async function maintenance() {
     for (const employee of records.filter(
       (r) => r.kind === "employee" && r.data.status === "Active",
     )) {
+      const lead = company.settings.clockReminderMinutes ?? 15;
+      if (lead > 0) {
+        for (const offset of [0, 1]) {
+          const targetDay = new Date(Date.parse(day) + offset * 86400000)
+            .toISOString()
+            .slice(0, 10);
+          const holiday =
+            company.settings.holidays.includes(targetDay) ||
+            records.some(
+              (r) =>
+                r.kind === "holiday" &&
+                r.data.date === targetDay &&
+                (r.data.state === "National" ||
+                  r.data.state === employee.data.state),
+            );
+          const absent = records.some(
+            (r) =>
+              r.employee_id === employee.id &&
+              ((r.kind === "attendance" && r.data.workDate === targetDay) ||
+                (r.kind === "leave" &&
+                  r.data.status === "Approved" &&
+                  r.data.unit === "Full day" &&
+                  String(r.data.startDate) <= targetDay &&
+                  String(r.data.endDate) >= targetDay)),
+          );
+          if (holiday || absent) continue;
+          for (const shift of records.filter(
+            (r) =>
+              r.kind === "shift" &&
+              ((r.data.employeeIds as string[]).includes(employee.id) ||
+                ((r.data.departmentIds as string[]) || []).includes(
+                  String(employee.data.departmentId),
+                )) &&
+              shiftOccurs(r.data, targetDay) &&
+              (r.data.days as number[]).includes(
+                new Date(targetDay + "T00:00:00Z").getUTCDay(),
+              ),
+          )) {
+            const [h, m] = String(shift.data.start).split(":").map(Number);
+            const remaining = offset * 1440 + h * 60 + m - minute;
+            const timeOff = records.some(
+              (r) =>
+                r.kind === "time_off" &&
+                r.employee_id === employee.id &&
+                r.data.status === "Approved" &&
+                r.data.date === targetDay &&
+                String(r.data.start) <= String(shift.data.start) &&
+                String(r.data.end) > String(shift.data.start),
+            );
+            const onLeave = records.some((r) => {
+              if (
+                r.kind !== "leave" ||
+                r.employee_id !== employee.id ||
+                r.data.status !== "Approved" ||
+                String(r.data.startDate) > targetDay ||
+                String(r.data.endDate) < targetDay
+              )
+                return false;
+              const [from, to] = leavePortion(r.data);
+              return (h * 60 + m) / 1440 >= from && (h * 60 + m) / 1440 < to;
+            });
+            if (remaining >= 0 && remaining <= lead && !timeOff && !onLeave)
+              for (const member of members.filter(
+                (m) => m.employee_id === employee.id,
+              ))
+                await reminder(
+                  member,
+                  company,
+                  "Your shift starts soon",
+                  `${shift.data.name} starts at ${shift.data.start} on ${targetDay}.`,
+                  "/?view=attendance",
+                  `preclock:${employee.id}:${shift.id}:${targetDay}`,
+                );
+          }
+        }
+      }
       const weekday = new Date(day + "T00:00:00Z").getUTCDay(),
         holiday =
           company.settings.holidays.includes(day) ||

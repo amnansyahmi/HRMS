@@ -1,7 +1,9 @@
+import { resubmitClaim } from "@/lib/claims";
 import { getActor, assertOrigin } from "@/lib/auth";
 import {
   clock,
   recalculatePayroll,
+  refreshPayroll,
   reviewRequest,
   generatePayroll,
   publishPayroll,
@@ -23,6 +25,8 @@ export async function POST(
     const actor = await getActor(),
       body = await jsonBody(request),
       { action } = await params;
+    if (action === "claim-resubmit")
+      return Response.json(await resubmitClaim(actor, body));
     if (action === "receipt-ocr")
       return Response.json(await ocrReceipt(actor, body));
     if (action === "meeting-transcribe")
@@ -34,6 +38,8 @@ export async function POST(
       return Response.json(await reviewRequest(actor, body));
     if (action === "payroll-generate")
       return Response.json(await generatePayroll(actor, body));
+    if (action === "payroll-refresh")
+      return Response.json(await refreshPayroll(actor, body));
     if (action === "payroll-calculate")
       return Response.json(await recalculatePayroll(actor, body));
     if (action === "payroll-publish")

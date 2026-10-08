@@ -1,4 +1,6 @@
 "use client";
+import { hasPayroll } from "@/lib/workflow-config";
+import { payCycles } from "@/lib/pay-runs-client";
 import { useState } from "react";
 import {
   Download,
@@ -8,6 +10,7 @@ import {
   Calculator,
   ExternalLink,
 } from "lucide-react";
+import { Checkbox } from "./ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -21,18 +24,33 @@ import {
 import { useWorkspace } from "./workspace-context";
 import { PageHeader, Person, Status, Empty } from "./common";
 import { money } from "@/lib/client";
-import { isStaff } from "@/lib/types";
 export function PayrollPage() {
   const { workspace, edit, act } = useWorkspace(),
     [tab, setTab] = useState("payroll"),
     [period, setPeriod] = useState(new Date().toISOString().slice(0, 7)),
     [year, setYear] = useState(new Date().getFullYear()),
     [scope, setScope] = useState(""),
+    [runId, setRunId] = useState(""),
+    [cycle, setCycle] = useState("Monthly"),
+    [title, setTitle] = useState(""),
+    [finalInMonth, setFinalInMonth] = useState(false),
+    [startDate, setStartDate] = useState(""),
+    [endDate, setEndDate] = useState(""),
+    [payDate, setPayDate] = useState(""),
     [publishing, setPublishing] = useState(false),
     [busy, setBusy] = useState(false),
-    staff = isStaff(workspace.actor),
+    staff = hasPayroll(workspace.actor),
+    prepare = hasPayroll(workspace.actor, "prepare"),
+    approve = hasPayroll(workspace.actor, "approve"),
+    pay = hasPayroll(workspace.actor, "pay"),
+    runs = workspace.records.filter(
+      (r) => r.kind === "payroll_run" && r.data.period === period,
+    ),
     rows = workspace.records.filter(
-      (r) => r.kind === "payroll" && r.data.period === period,
+      (r) =>
+        r.kind === "payroll" &&
+        r.data.period === period &&
+        (!staff || (runId ? r.data.runId === runId : !r.data.runId)),
     ),
     drafts = rows.filter((r) => r.data.status === "Draft");
   async function generate() {
@@ -40,12 +58,28 @@ export function PayrollPage() {
     try {
       const result = (await act("payroll-generate", {
         period,
+        ...(runId
+          ? { runId }
+          : cycle !== "Monthly"
+            ? {
+                cycle,
+                startDate,
+                endDate,
+                payDate,
+                finalInMonth,
+                ...(title.trim() ? { title: title.trim() } : {}),
+              }
+            : {}),
         ...(scope.startsWith("department:")
           ? { departmentId: scope.slice(11) }
           : scope
             ? { employeeId: scope }
             : {}),
-      })) as { created: number } | undefined;
+      })) as { created: number; runId?: string; period: string } | undefined;
+      if (result?.runId) {
+        setRunId(result.runId);
+        setPeriod(result.period);
+      }
       if (result)
         toastResult(
           result.created
@@ -61,7 +95,7 @@ export function PayrollPage() {
     try {
       const result = await act(
         "payroll-publish",
-        { period },
+        runId ? { runId } : { period },
         "Payslips published",
       );
       if (result) setPublishing(false);
@@ -75,7 +109,7 @@ export function PayrollPage() {
         title="Payroll & payslips"
         description="Prepare, review and publish with a clear record of every amount."
         action={
-          staff && tab === "payroll" ? (
+          prepare && tab === "payroll" ? (
             <Button disabled={busy} onClick={generate}>
               <Calculator size={16} />
               Prepare payroll
@@ -108,10 +142,89 @@ export function PayrollPage() {
                 aria-label="Payroll period"
                 type="month"
                 value={period}
-                onChange={(e) => setPeriod(e.target.value)}
+                onChange={(e) => {
+                  setPeriod(e.target.value);
+                  setRunId("");
+                }}
               />
             </label>
             {staff ? (
+              <label className="period-picker">
+                Pay run
+                <select
+                  className="native-select"
+                  aria-label="Pay run"
+                  value={runId}
+                  onChange={(e) => setRunId(e.target.value)}
+                >
+                  <option value="">Monthly / new run</option>
+                  {runs.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {String(r.data.title)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {prepare && !runId ? (
+              <label className="period-picker">
+                Cycle
+                <select
+                  className="native-select"
+                  aria-label="Pay cycle"
+                  value={cycle}
+                  onChange={(e) => setCycle(e.target.value)}
+                >
+                  {payCycles.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {prepare && !runId && cycle !== "Monthly" ? (
+              <label className="period-picker">
+                Run name (optional)
+                <input
+                  className="native-select"
+                  aria-label="Run name"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Use the cycle and dates"
+                />
+              </label>
+            ) : null}
+            {prepare && !runId && cycle !== "Monthly" ? (
+              <div className="pay-run-dates">
+                {[
+                  ["Starts", startDate, setStartDate],
+                  ["Ends", endDate, setEndDate],
+                  ["Pay date", payDate, setPayDate],
+                ].map(([label, value, setter]) => (
+                  <label className="period-picker" key={String(label)}>
+                    {String(label)}
+                    <input
+                      className="native-select"
+                      type="date"
+                      aria-label={`Run ${label}`}
+                      value={String(value)}
+                      onChange={(e) =>
+                        (setter as (v: string) => void)(e.target.value)
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            ) : null}
+            {prepare && !runId && cycle !== "Monthly" ? (
+              <label className="check-label">
+                <Checkbox
+                  checked={finalInMonth}
+                  onCheckedChange={(value) => setFinalInMonth(value === true)}
+                />
+                Last payday of this month
+              </label>
+            ) : null}
+            {prepare && !runId ? (
               <select
                 className="native-select"
                 aria-label="Payroll scope"
@@ -142,13 +255,15 @@ export function PayrollPage() {
             <div className="table-actions">
               {staff && rows.length ? (
                 <Button size="sm" variant="outline" asChild>
-                  <a href={`/api/export?type=payroll&period=${period}`}>
+                  <a
+                    href={`/api/export?type=payroll&period=${period}${runId ? `&runId=${runId}` : "&legacy=true"}`}
+                  >
                     <Download size={14} />
                     CSV
                   </a>
                 </Button>
               ) : null}
-              {staff &&
+              {pay &&
               rows.some(
                 (r) => r.data.status === "Published" && !r.data.voucherId,
               ) ? (
@@ -175,7 +290,7 @@ export function PayrollPage() {
                   Prepare voucher
                 </Button>
               ) : null}
-              {staff && drafts.length ? (
+              {approve && drafts.length ? (
                 <Button
                   size="sm"
                   disabled={busy}
@@ -233,13 +348,23 @@ export function PayrollPage() {
                         </td>
                         <td>{money(r.data.gross)}</td>
                         <td>
-                          {money(Number(r.data.gross) - Number(r.data.net))}
+                          {money(
+                            Number(r.data.gross) +
+                              Number(r.data.reimbursements || 0) -
+                              Number(r.data.net),
+                          )}
                         </td>
                         <td>
                           <strong>{money(r.data.net)}</strong>
                         </td>
                         <td>
                           <Status value={r.data.status} />
+                          <small className="cell-detail">
+                            {String(r.data.cycle || "Monthly")}
+                            {r.data.startDate
+                              ? ` · ${r.data.startDate} to ${r.data.endDate}`
+                              : ""}
+                          </small>
                           {r.data.status === "Draft" ? (
                             <small className="cell-detail">
                               {r.data.reviewed ? "Reviewed" : "Needs review"}
@@ -247,8 +372,21 @@ export function PayrollPage() {
                           ) : null}
                         </td>
                         <td>
-                          {r.data.status === "Draft" ? (
+                          {r.data.status === "Draft" && prepare ? (
                             <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  void act(
+                                    "payroll-refresh",
+                                    { id: r.id },
+                                    "Inputs refreshed; recalculate and review deductions",
+                                  )
+                                }
+                              >
+                                Refresh inputs
+                              </Button>
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -260,7 +398,9 @@ export function PayrollPage() {
                                   )
                                 }
                               >
-                                Calculate statutory
+                                {r.data.cycle && r.data.cycle !== "Monthly"
+                                  ? "Reconcile month-end deductions"
+                                  : "Calculate statutory"}
                               </Button>
                               <Button
                                 variant="outline"
@@ -271,7 +411,7 @@ export function PayrollPage() {
                                 Review
                               </Button>
                             </>
-                          ) : (
+                          ) : r.data.status === "Published" ? (
                             <Button asChild variant="outline" size="sm">
                               <a
                                 href={`/payslip/${r.id}`}
@@ -282,6 +422,8 @@ export function PayrollPage() {
                                 Payslip
                               </a>
                             </Button>
+                          ) : (
+                            <span>Awaiting payroll review</span>
                           )}
                         </td>
                       </tr>
@@ -302,9 +444,13 @@ export function PayrollPage() {
           )}{" "}
           {staff ? (
             <div className="info-note">
-              Use Calculate statutory after verifying the employee profile, or
-              enter manually verified deductions. Every draft requires HR review
-              before publication.
+              Interim weekly, fortnightly and off-cycle runs require verified
+              manual deductions. Reconcile statutory totals in the last pay run
+              of the month, subtracting contributions already published.
+              Off-cycle runs pay additional earnings without paying base salary
+              twice. Use Calculate statutory after verifying the employee
+              profile, or enter manually verified deductions. Every draft
+              requires HR review before publication.
             </div>
           ) : null}
         </TabsContent>
@@ -385,7 +531,7 @@ export function PayrollPage() {
       <Dialog open={publishing} onOpenChange={setPublishing}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Publish this month’s payslips?</DialogTitle>
+            <DialogTitle>Publish this pay run’s payslips?</DialogTitle>
             <DialogDescription>
               {drafts.length} payslips for {period} will become visible to their
               employees. Published amounts are locked. This records payroll; it

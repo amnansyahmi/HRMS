@@ -24,6 +24,11 @@ import { api } from "@/lib/client";
 import { toast } from "sonner";
 import { useWorkspace } from "./workspace-context";
 import { NativeSelect } from "./common";
+import {
+  specialistLabels,
+  specialistNames,
+  specialistAllows,
+} from "@/lib/workflow-config";
 import { isStaff } from "@/lib/types";
 export type AssistantIntent = {
   mode: string;
@@ -38,7 +43,14 @@ type Message = {
   role: string;
   content: string;
   sources: Source[];
-  cards?: { id: string; action: string; label: string; expiresAt: string }[];
+  cards?: {
+    id: string;
+    action: string;
+    label: string;
+    expiresAt: string;
+    preview?: Record<string, unknown>;
+    requiresLocation?: boolean;
+  }[];
 };
 export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
   const { workspace, go, edit, act } = useWorkspace(),
@@ -195,7 +207,7 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
           <h1>People AI</h1>
           <span>
             {workspace.ai.model || "ai-nonymauz-cloud"}
-            <span className="dot-separator">·</span>Read-only assistant
+            <span className="dot-separator">·</span>Changes require confirmation
           </span>
         </div>
         <div className="table-actions">
@@ -325,12 +337,51 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                           Confirm this change. Your permissions and the latest
                           record will be checked.
                         </p>
+                        {card.preview ? (
+                          <pre className="action-preview">
+                            {JSON.stringify(card.preview, null, 2)}
+                          </pre>
+                        ) : null}
                         <Button
                           size="sm"
                           onClick={async () => {
+                            let coordinates:
+                              | {
+                                  latitude: number;
+                                  longitude: number;
+                                  accuracy: number;
+                                }
+                              | undefined;
+                            if (card.requiresLocation) {
+                              try {
+                                const position =
+                                  await new Promise<GeolocationPosition>(
+                                    (resolve, reject) =>
+                                      navigator.geolocation.getCurrentPosition(
+                                        resolve,
+                                        reject,
+                                        {
+                                          enableHighAccuracy: true,
+                                          maximumAge: 0,
+                                          timeout: 15000,
+                                        },
+                                      ),
+                                  );
+                                coordinates = {
+                                  latitude: position.coords.latitude,
+                                  longitude: position.coords.longitude,
+                                  accuracy: position.coords.accuracy,
+                                };
+                              } catch {
+                                toast.error(
+                                  "Allow precise location to confirm clock-in",
+                                );
+                                return;
+                              }
+                            }
                             const result = await act(
                               "ai-confirm",
-                              { id: card.id },
+                              { id: card.id, coordinates },
                               "Confirmed action completed",
                             );
                             if (result)
@@ -420,25 +471,39 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
       </div>
       <div className="composer-area">
         <div className="composer-options">
-          {staff ? (
-            <NativeSelect
-              label="Assistant mode"
-              value={mode}
-              onChange={(v) => {
-                setMode(v);
-                setRecordId("");
-              }}
-              options={[
-                { value: "hr", label: "HR assistant" },
-                { value: "recruit", label: "Recruit assistant" },
-                { value: "resume", label: "Resume review" },
-                { value: "meeting", label: "Meeting summary" },
-                { value: "preferences", label: "Work preferences" },
-              ]}
-            />
-          ) : (
-            <span>HR assistant</span>
-          )}
+          <NativeSelect
+            label="Assistant mode"
+            value={mode}
+            onChange={(v) => {
+              setMode(v);
+              setRecordId("");
+            }}
+            options={[
+              { value: "hr", label: "HR assistant" },
+              ...specialistNames
+                .filter(
+                  (name) =>
+                    specialistAllows(
+                      workspace.company.settings,
+                      name,
+                      "read",
+                    ) &&
+                    (name !== "recruitment" || staff),
+                )
+                .map((name) => ({
+                  value: name,
+                  label: specialistLabels[name] + " specialist",
+                })),
+              ...(staff
+                ? [
+                    { value: "resume", label: "Resume review" },
+                    { value: "meeting", label: "Meeting summary" },
+                    { value: "preferences", label: "Work preferences" },
+                  ]
+                : []),
+            ]}
+          />
+
           {["resume", "meeting", "preferences"].includes(mode) ? (
             <NativeSelect
               label="Record for AI review"

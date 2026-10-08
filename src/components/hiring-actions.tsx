@@ -13,10 +13,13 @@ import {
 import { useWorkspace } from "./workspace-context";
 import type { HRRecord } from "@/lib/types";
 export function HireButton({ candidate }: { candidate: HRRecord }) {
-  const { act } = useWorkspace(),
+  const { act, workspace } = useWorkspace(),
     [open, setOpen] = useState(false),
     [date, setDate] = useState(""),
-    [salary, setSalary] = useState(0);
+    [salary, setSalary] = useState(0),
+    [employmentType, setEmploymentType] = useState(
+      workspace.company.settings.employeeTypes[0],
+    );
   return (
     <>
       <Button
@@ -43,6 +46,17 @@ export function HireButton({ candidate }: { candidate: HRRecord }) {
             value={date}
             onChange={(e) => setDate(e.target.value)}
           />
+          <Label htmlFor="hire-type">Employment type</Label>
+          <select
+            id="hire-type"
+            className="native-select"
+            value={employmentType}
+            onChange={(e) => setEmploymentType(e.target.value)}
+          >
+            {workspace.company.settings.employeeTypes.map((type) => (
+              <option key={type}>{type}</option>
+            ))}
+          </select>
           <Label htmlFor="hire-salary">Monthly base salary (RM)</Label>
           <Input
             type="number"
@@ -56,7 +70,10 @@ export function HireButton({ candidate }: { candidate: HRRecord }) {
             onClick={async () => {
               const result = await act(
                 "candidate-hire",
-                { id: candidate.id, data: { startDate: date, salary } },
+                {
+                  id: candidate.id,
+                  data: { startDate: date, salary, employmentType },
+                },
                 "Employee profile created",
               );
               if (result) setOpen(false);

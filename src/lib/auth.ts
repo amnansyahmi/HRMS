@@ -11,6 +11,7 @@ import { db, transaction, type DB } from "./db";
 import { fail } from "./errors";
 import { checkMFA } from "./account";
 import { queueEmail } from "./notifications";
+import { defaultEmployeeStatuses, defaultSpecialists } from "./workflow-config";
 import type { Actor, Company, Role } from "./types";
 export const COOKIE = "hrms_session";
 export const hashToken = (token: string) =>
@@ -89,7 +90,7 @@ export async function getActor(): Promise<Actor> {
   const session = (await cookies()).get(COOKIE)?.value;
   if (!session) fail("Please sign in to continue", 401);
   const result = await db.query<Actor>(
-    `SELECT u.id AS "userId", u.name, u.email, s.company_id AS "companyId", m.role, m.employee_id AS "employeeId" FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id AND m.company_id=s.company_id WHERE s.token_hash=$1 AND s.expires_at>now() AND (NOT EXISTS(SELECT 1 FROM companies c WHERE c.id=s.company_id AND c.is_demo) OR s.created_at>now()-interval '7 days')`,
+    `SELECT u.id AS "userId", u.name, u.email, s.company_id AS "companyId", m.role, m.employee_id AS "employeeId", m.payroll_access AS "payrollAccess" FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id AND m.company_id=s.company_id WHERE s.token_hash=$1 AND s.expires_at>now() AND (NOT EXISTS(SELECT 1 FROM companies c WHERE c.id=s.company_id AND c.is_demo) OR s.created_at>now()-interval '7 days')`,
     [hashToken(session)],
   );
   if (!result.rows[0]) fail("Your session expired. Please sign in again.", 401);
@@ -110,6 +111,10 @@ export async function getCompany(
     settings: {
       ...defaultSettings,
       ...company.settings,
+      aiSpecialists: {
+        ...defaultSpecialists,
+        ...company.settings.aiSpecialists,
+      },
       aiAgents: { ...defaultSettings.aiAgents, ...company.settings.aiAgents },
     },
   };
@@ -119,6 +124,10 @@ export const defaultSettings = {
   workDays: [1, 2, 3, 4, 5],
   holidays: [],
   overtimeRates: { Normal: 1.5, "Rest day": 2, "Public holiday": 3 },
+  employeeStatuses: defaultEmployeeStatuses,
+  employeeTypes: ["Full-time", "Part-time", "Contract", "Intern"],
+  clockReminderMinutes: 15,
+  aiSpecialists: defaultSpecialists,
   aiEnabled: false,
   aiActionsEnabled: false,
   aiAgents: {

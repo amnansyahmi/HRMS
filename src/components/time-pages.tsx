@@ -37,6 +37,7 @@ import {
 } from "./common";
 import { shortDate, money } from "@/lib/client";
 import { localDate } from "@/lib/calculations";
+import { hasPayroll } from "@/lib/workflow-config";
 import { isStaff, type HRRecord } from "@/lib/types";
 export function AttendancePage() {
   const { workspace, edit, act } = useWorkspace(),
@@ -387,6 +388,7 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
           <Button
             size="sm"
             variant="outline"
+            disabled={!hasPayroll(workspace.actor, "pay")}
             onClick={() => {
               const claims = workspace.records.filter(
                 (r) =>
@@ -540,7 +542,7 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
             "Approved",
             "Rejected",
             "Cancelled",
-            ...(kind === "claim" ? ["Paid"] : []),
+            ...(kind === "claim" ? ["Returned", "Paid"] : []),
           ].map((v) => ({ value: v, label: v === "All" ? "All statuses" : v }))}
         />
       </div>
@@ -576,6 +578,29 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                       >
                         {String(r.data.reason || r.data.description)}
                       </small>
+                      {kind === "claim" &&
+                      (r.data.history as unknown[])?.length ? (
+                        <details className="claim-history">
+                          <summary>Submission history</summary>
+                          {(
+                            r.data.history as {
+                              at: string;
+                              by: string;
+                              action: string;
+                              note: string;
+                              snapshot?: { amount?: number };
+                            }[]
+                          ).map((h, i) => (
+                            <p key={i}>
+                              {shortDate(h.at)} · {h.by} · {h.action}
+                              {h.snapshot?.amount !== undefined
+                                ? ` · ${money(h.snapshot.amount)}`
+                                : ""}
+                              {h.note ? ` — ${h.note}` : ""}
+                            </p>
+                          ))}
+                        </details>
+                      ) : null}
                       {r.data.reviewNote ? (
                         <small className="cell-detail">
                           Review: {String(r.data.reviewNote)}
@@ -638,6 +663,32 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                             </Button>
                           </>
                         ) : null}
+                        {kind === "claim" &&
+                        r.data.status === "Pending" &&
+                        canReview &&
+                        !self ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setReview({ record: r, decision: "Returned" });
+                              setNote("");
+                            }}
+                          >
+                            Return for correction
+                          </Button>
+                        ) : null}
+                        {kind === "claim" &&
+                        r.data.status === "Returned" &&
+                        self ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => edit("claim", r)}
+                          >
+                            Correct & resubmit
+                          </Button>
+                        ) : null}
                         {r.data.status === "Pending" && self ? (
                           <Button
                             variant="ghost"
@@ -652,7 +703,7 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                         ) : null}
                         {kind === "claim" &&
                         r.data.status === "Approved" &&
-                        staff ? (
+                        hasPayroll(workspace.actor, "pay") ? (
                           <Button
                             variant="outline"
                             size="sm"
@@ -689,9 +740,11 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                 ? "Approve request"
                 : review?.decision === "Rejected"
                   ? "Reject request"
-                  : review?.decision === "Paid"
-                    ? "Mark claim as paid"
-                    : "Cancel request"}
+                  : review?.decision === "Returned"
+                    ? "Return claim for correction"
+                    : review?.decision === "Paid"
+                      ? "Mark claim as paid"
+                      : "Cancel request"}
             </DialogTitle>
             <DialogDescription>
               {review
@@ -704,7 +757,11 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
           </DialogHeader>
           <Textarea
             aria-label="Review note"
-            placeholder="Add a note (optional)"
+            placeholder={
+              review?.decision === "Returned"
+                ? "Explain what needs correcting (required)"
+                : "Add a note (optional)"
+            }
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
@@ -716,7 +773,12 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
             >
               Back
             </Button>
-            <Button disabled={busy} onClick={decide}>
+            <Button
+              disabled={
+                busy || (review?.decision === "Returned" && !note.trim())
+              }
+              onClick={decide}
+            >
               Confirm
             </Button>
           </DialogFooter>

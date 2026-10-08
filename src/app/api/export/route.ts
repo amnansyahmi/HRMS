@@ -1,3 +1,4 @@
+import { hasPayroll } from "@/lib/workflow-config";
 import { z } from "zod";
 import { getActor, getCompany, audit } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -8,7 +9,7 @@ export const runtime = "nodejs";
 export async function GET(request: Request) {
   return handle(async () => {
     const actor = await getActor();
-    if (!isStaff(actor)) fail("Only HR can export company records", 403);
+
     const url = new URL(request.url),
       type = z
         .enum([
@@ -21,6 +22,12 @@ export async function GET(request: Request) {
           "claims",
         ])
         .parse(url.searchParams.get("type"));
+    if (
+      ["payroll", "EA", "CP22", "CP22A", "voucher"].includes(type)
+        ? !hasPayroll(actor)
+        : !isStaff(actor)
+    )
+      fail("You do not have permission to export these records", 403);
     const company = await getCompany(actor),
       year = z.coerce
         .number()
@@ -137,16 +144,25 @@ export async function GET(request: Request) {
         .string()
         .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
         .parse(url.searchParams.get("period"));
-      filename += `-${period}`;
+      const runId = url.searchParams.get("runId")
+        ? z.uuid().parse(url.searchParams.get("runId"))
+        : null;
+      const legacy = url.searchParams.get("legacy") === "true";
+      filename += `-${period}${runId ? "-" + runId : ""}`;
       const payslips = (
         await db.query<HRRecord>(
-          "SELECT * FROM hr_records WHERE company_id=$1 AND kind='payroll' AND data->>'period'=$2 ORDER BY data->>'employeeName'",
-          [actor.companyId, period],
+          "SELECT * FROM hr_records WHERE company_id=$1 AND kind='payroll' AND data->>'period'=$2 AND ($3::text IS NULL OR data->>'runId'=$3) AND (NOT $4::boolean OR data->>'runId' IS NULL) ORDER BY data->>'employeeName'",
+          [actor.companyId, period, runId, legacy],
         )
       ).rows;
       const keys = [
         "employeeName",
         "period",
+        "runId",
+        "cycle",
+        "startDate",
+        "endDate",
+        "payDate",
         "base",
         "allowance",
         "overtime",

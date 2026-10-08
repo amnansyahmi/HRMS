@@ -1,4 +1,5 @@
 "use client";
+import { hasPayroll } from "@/lib/workflow-config";
 import { useCallback, useEffect, useState, useRef } from "react";
 import dynamic from "next/dynamic";
 import {
@@ -155,6 +156,8 @@ const kindPage: Partial<Record<Kind, Page>> = {
   review_cycle: "reviews",
   evaluation_template: "reviews",
   evaluation: "reviews",
+  designation: "people",
+  payroll_run: "payroll",
   payment_voucher: "payments",
   employee: "people",
   department: "people",
@@ -240,8 +243,10 @@ function Sidebar({
       </Button>
       <nav aria-label="Workspace navigation">
         {navigation.map((group) => {
-          const items = group.items.filter(
-            (item) => staff || !["recruitment", "payments"].includes(item.page),
+          const items = group.items.filter((item) =>
+            item.page === "payments"
+              ? hasPayroll(workspace.actor)
+              : staff || item.page !== "recruitment",
           );
           if (!items.length) return null;
           return (
@@ -457,7 +462,9 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
       </div>
     );
   const staff = isStaff(workspace.actor),
-    restricted = !staff && ["recruitment", "payments"].includes(page),
+    restricted =
+      (page === "recruitment" && !staff) ||
+      (page === "payments" && !hasPayroll(workspace.actor)),
     visiblePage = restricted ? "overview" : page;
   const results = search.trim()
     ? workspace.records

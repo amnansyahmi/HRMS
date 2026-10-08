@@ -1,4 +1,5 @@
 "use client";
+import { hasPayroll } from "@/lib/workflow-config";
 import { useEffect, useState } from "react";
 import {
   Plus,
@@ -780,7 +781,7 @@ function RecordDetail({ record: r }: { record: HRRecord }) {
           <dt>Bank reference</dt>
           <dd>{String(r.data.bankReference || "—")}</dd>
         </dl>
-        {staff && r.data.status === "Prepared" ? (
+        {hasPayroll(workspace.actor, "pay") && r.data.status === "Prepared" ? (
           <>
             <Input
               aria-label="Bank transfer reference"
