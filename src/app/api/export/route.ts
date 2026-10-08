@@ -1,0 +1,191 @@
+import { z } from "zod";
+import { getActor, getCompany, audit } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { csv } from "@/lib/calculations";
+import { handle, fail } from "@/lib/errors";
+import { isStaff, type HRRecord } from "@/lib/types";
+export const runtime = "nodejs";
+export async function GET(request: Request) {
+  return handle(async () => {
+    const actor = await getActor();
+    if (!isStaff(actor)) fail("Only HR can export company records", 403);
+    const url = new URL(request.url),
+      type = z
+        .enum(["employees", "payroll", "EA", "CP22", "CP22A"])
+        .parse(url.searchParams.get("type"));
+    const company = await getCompany(actor),
+      year = z.coerce
+        .number()
+        .int()
+        .min(2020)
+        .max(2100)
+        .parse(url.searchParams.get("year") || new Date().getFullYear());
+    const employees = (
+      await db.query<HRRecord>(
+        "SELECT * FROM hr_records WHERE company_id=$1 AND kind='employee' ORDER BY data->>'name'",
+        [actor.companyId],
+      )
+    ).rows;
+    let rows: (string | number | null | undefined)[][] = [],
+      filename = type;
+    if (type === "employees")
+      rows = [
+        [
+          "Name",
+          "Email",
+          "Title",
+          "Start date",
+          "End date",
+          "Employment",
+          "Status",
+          "Base salary (MYR)",
+          "Annual leave allowance",
+          "Sick leave allowance",
+        ],
+        ...employees.map((e) => [
+          String(e.data.name),
+          String(e.data.email),
+          String(e.data.title),
+          String(e.data.startDate),
+          String(e.data.endDate || ""),
+          String(e.data.employmentType),
+          String(e.data.status),
+          Number(e.data.salary),
+          Number(e.data.annualLeave),
+          Number(e.data.sickLeave),
+        ]),
+      ];
+    else if (type === "payroll") {
+      const period = z
+        .string()
+        .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+        .parse(url.searchParams.get("period"));
+      filename += `-${period}`;
+      const payslips = (
+        await db.query<HRRecord>(
+          "SELECT * FROM hr_records WHERE company_id=$1 AND kind='payroll' AND data->>'period'=$2 ORDER BY data->>'employeeName'",
+          [actor.companyId, period],
+        )
+      ).rows;
+      const keys = [
+        "employeeName",
+        "period",
+        "base",
+        "allowance",
+        "overtime",
+        "bonus",
+        "epfEmployee",
+        "socsoEmployee",
+        "eisEmployee",
+        "pcb",
+        "otherDeduction",
+        "epfEmployer",
+        "socsoEmployer",
+        "eisEmployer",
+        "gross",
+        "net",
+        "status",
+      ];
+      rows = [
+        keys,
+        ...payslips.map((p) => keys.map((key) => String(p.data[key] ?? ""))),
+      ];
+    } else {
+      filename += `-worksheet-${year}`;
+      rows = [
+        [`${type} PREPARATION WORKSHEET — NOT AN OFFICIAL FORM OR SUBMISSION`],
+        [
+          "Company",
+          company.name,
+          "Registration",
+          company.settings.registrationNo,
+          "Employer tax number",
+          company.settings.taxNo,
+        ],
+        ["Year", year],
+        [
+          "Complete and verify the current official form using MyTax / HASiL. Additional statutory fields and adjustments must be entered in the official form.",
+        ],
+      ];
+      if (type === "EA") {
+        const payslips = (
+          await db.query<HRRecord>(
+            "SELECT * FROM hr_records WHERE company_id=$1 AND kind='payroll' AND data->>'status'='Published' AND left(data->>'period',4)=$2",
+            [actor.companyId, String(year)],
+          )
+        ).rows;
+        const keys = [
+          "base",
+          "allowance",
+          "overtime",
+          "bonus",
+          "gross",
+          "epfEmployee",
+          "socsoEmployee",
+          "eisEmployee",
+          "pcb",
+          "otherDeduction",
+          "net",
+        ];
+        rows.push([
+          "Employee",
+          "Email",
+          "Published months",
+          ...keys.map((k) => `${k} (MYR)`),
+        ]);
+        for (const e of employees) {
+          const items = payslips.filter((p) => p.employee_id === e.id);
+          if (!items.length) continue;
+          rows.push([
+            String(e.data.name),
+            String(e.data.email),
+            items.length,
+            ...keys.map(
+              (k) =>
+                Math.round(
+                  items.reduce(
+                    (n, p) => n + Math.round(Number(p.data[k]) * 100),
+                    0,
+                  ),
+                ) / 100,
+            ),
+          ]);
+        }
+      } else {
+        rows.push([
+          "Employee",
+          "Email",
+          "Job title",
+          "Employment start",
+          "Employment end",
+          "Phone",
+          "Current base salary (MYR)",
+        ]);
+        for (const e of employees.filter((e) =>
+          type === "CP22"
+            ? String(e.data.startDate).startsWith(String(year))
+            : e.data.status === "Archived" &&
+              e.data.endDate &&
+              String(e.data.endDate).startsWith(String(year)),
+        ))
+          rows.push([
+            String(e.data.name),
+            String(e.data.email),
+            String(e.data.title),
+            String(e.data.startDate),
+            String(e.data.endDate || ""),
+            String(e.data.phone || ""),
+            Number(e.data.salary),
+          ]);
+      }
+    }
+    await audit(db, actor, `Exported ${type}`, null, { year });
+    return new Response(csv(rows), {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${filename}.csv"`,
+        "Cache-Control": "private, no-store",
+      },
+    });
+  });
+}
