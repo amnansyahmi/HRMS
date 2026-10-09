@@ -8,6 +8,8 @@ import {
   MessageSquare,
   Receipt,
   ArrowUpRight,
+  ClipboardCheck,
+  UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspace } from "./workspace-context";
@@ -91,8 +93,8 @@ export function OverviewPage() {
           day: "numeric",
           month: "long",
         }).format(new Date())}
-        title={`Good to see you, ${actor.name.split(" ")[0]}.`}
-        description="Here’s what’s happening with your people."
+        title={`Your workday, ${actor.name.split(" ")[0]}.`}
+        description="Team activity and the work that needs your attention."
         action={
           staff ? (
             <Button variant="outline" onClick={() => edit("employee")}>
@@ -119,10 +121,8 @@ export function OverviewPage() {
           <MessageSquare size={22} />
         </div>
         <div>
-          <h2>A little help with your HR day.</h2>
-          <p>
-            Ask about leave, policies, your team or the next thing to follow up.
-          </p>
+          <h2>People AI</h2>
+          <p>Find an answer. Plan your next step.</p>
         </div>
         <Button
           variant="outline"
@@ -134,16 +134,36 @@ export function OverviewPage() {
           <ArrowUpRight size={15} />
         </Button>
       </section>
-      <div className="profile-links overview-shortcuts">
-        <Button variant="outline" onClick={() => go("approvals")}>
-          Approval inbox
-        </Button>
-        <Button variant="outline" onClick={() => go("calendar")}>
-          Team calendar
-        </Button>
-        <Button variant="outline" onClick={() => go("my-profile")}>
-          My profile
-        </Button>
+      <div className="overview-shortcuts" aria-label="Quick access">
+        {[
+          {
+            page: "approvals" as const,
+            label: "Approval inbox",
+            detail: canReview ? "Review team requests" : "Track your requests",
+            icon: ClipboardCheck,
+          },
+          {
+            page: "calendar" as const,
+            label: "Team calendar",
+            detail: "See what’s coming up",
+            icon: CalendarDays,
+          },
+          {
+            page: "my-profile" as const,
+            label: "My profile",
+            detail: "Manage your details",
+            icon: UserRound,
+          },
+        ].map((item) => (
+          <button key={item.page} onClick={() => go(item.page)}>
+            <item.icon size={20} aria-hidden="true" />
+            <span>
+              <strong>{item.label}</strong>
+              <small>{item.detail}</small>
+            </span>
+            <ArrowRight size={16} aria-hidden="true" />
+          </button>
+        ))}
       </div>
       <div className="overview-columns">
         <section className="panel">
@@ -240,7 +260,9 @@ export function OverviewPage() {
         <div className="panel-heading">
           <div>
             <h2>Goals in progress</h2>
-            <p>Small steps, meaningful progress.</p>
+            <p>
+              {goals.length} active {goals.length === 1 ? "goal" : "goals"}
+            </p>
           </div>
           <InlineLink onClick={() => go("performance")}>All goals</InlineLink>
         </div>

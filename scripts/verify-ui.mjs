@@ -102,7 +102,7 @@ try {
   await page.goto(base);
   await page.getByRole("button", { name: "Log in", exact: true }).click();
   await page
-    .getByRole("heading", { name: "Good to see you, Amnan." })
+    .getByRole("heading", { name: "Your workday, Amnan." })
     .waitFor({ timeout: 30000 });
   await mkdir("docs/screenshots", { recursive: true });
   await page.screenshot({
@@ -391,6 +391,20 @@ try {
     .locator(".sidebar-bottom")
     .getByRole("button", { name: "Settings", exact: true })
     .click();
+  await page.screenshot({
+    path: "docs/screenshots/settings-desktop.png",
+    fullPage: true,
+  });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await page.screenshot({
+    path: "docs/screenshots/settings-dark-desktop.png",
+    fullPage: true,
+  });
+  await page.emulateMedia({
+    colorScheme: "light",
+    reducedMotion: "no-preference",
+  });
+  await page.getByRole("tab", { name: "AI connection", exact: true }).click();
   await page
     .getByRole("heading", { name: "HR specialist permissions" })
     .waitFor();
@@ -402,6 +416,7 @@ try {
       .count(),
     7,
   );
+  await page.getByRole("tab", { name: "People rules", exact: true }).click();
   await page
     .getByLabel("Minutes before shift for reminders (0 disables)")
     .fill("20");
@@ -747,9 +762,7 @@ try {
   console.log("Public flows passed. Checking mobile and employee permissions.");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(base);
-  await page
-    .getByRole("heading", { name: "Good to see you, Amnan." })
-    .waitFor();
+  await page.getByRole("heading", { name: "Your workday, Amnan." }).waitFor();
   await page.screenshot({
     path: "docs/screenshots/overview-mobile.png",
     fullPage: true,
@@ -1047,8 +1060,35 @@ try {
   });
   await page.goto(`${base}/?view=settings`);
   await page
-    .getByRole("tab", { name: "Deployment setup", exact: true })
-    .click();
+    .getByLabel("Settings section", { exact: true })
+    .selectOption("employees");
+  await page.getByRole("heading", { name: "Employee configuration" }).waitFor();
+  await page.setViewportSize({ width: 320, height: 568 });
+  assert(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    "Small phone settings overflow",
+  );
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await page.screenshot({
+    path: "docs/screenshots/settings-dark-mobile.png",
+    fullPage: true,
+  });
+  await page.emulateMedia({
+    colorScheme: "light",
+    reducedMotion: "no-preference",
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByLabel("Settings section", { exact: true })
+    .selectOption("security");
+  await page
+    .getByRole("heading", { name: "Account security", exact: true })
+    .waitFor();
+  await page
+    .getByLabel("Settings section", { exact: true })
+    .selectOption("setup");
   await page
     .getByText("Database connection: responding.", { exact: false })
     .waitFor();

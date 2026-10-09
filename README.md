@@ -133,3 +133,9 @@ Claim policies support five reservation periods. Per-trip requests require a sta
 Job editors accept up to ten job-skills rubric rows in `skill or experience | weight` format. Resume mode requests one grade and an exact quotation for every configured criterion; the server rejects incomplete or fabricated evidence and calculates the weighted score. Grades are draft evidence descriptions for HR review, not verified competencies or automatic hiring decisions. Without a rubric, resume review stays qualitative. Completed DISC/DOPE/work-preference questionnaires can be selected for discussion summaries.
 
 AI letter cards show complete wording, title and date. Confirm saves exactly that wording as a draft; issuing stays a separate HR action. The assistant can prepare up to five independent cards; Confirm and Cancel affect only that card. Owners can enable the read-only CHRO brief in AI settings. Full Voice AI streaming and official statutory form generation remain open in the parity checklist.
+
+## Settings and appearance
+
+Settings uses a section menu on desktop and a labelled section picker on phones. General, People rules, Account security, Team access, AI connection, Deployment setup and Activity retain their existing role permissions. People and AI controls appear inside their own sections. Forms use readable spacing and the shared interface follows the device light/dark preference with SVG icons and larger phone touch targets.
+
+Workspace owners can use **AI connection → Check connection** to query the configured backend’s `/v1/models` catalogue. This sends no prompts or employee records, checks the configured alias, limits calls to ten per hour, and returns no URL or credential. A listed model does not certify successful generation. Server instructions are collapsed behind a disclosure. The provider adapter explicitly requests JSON because ai-nonymauz-cloud defaults to streaming.

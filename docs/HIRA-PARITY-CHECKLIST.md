@@ -34,7 +34,7 @@ Reviewed 9 October 2026. The target is every publicly documented HIRA HR workflo
 
 PR #5 consolidated the workflows from PRs #3 and #4 into `main`. The minimal People AI chat layout is a separate update built on that merged release.
 
-Production checks on 9 October 2026 now pass for `/api/health`, demo login and workspace loading. The Neon project `aged-hill-18142778` has separate production and preview branches with the 19-table HR schema. `APP_URL`, `DATABASE_URL` and the three AI provider variables are configured. Live model generation has not been certified; the owner must still enable AI in their workspace Settings. Email, scheduled processing, MFA/backup encryption keys and the media worker remain unconfigured according to the owner setup diagnostics. Local tests do not certify those live services.
+Production checks on 9 October 2026 now pass for `/api/health`, demo login and workspace loading. The Neon project `aged-hill-18142778` has separate production and preview branches with the 19-table HR schema. `APP_URL`, `DATABASE_URL` and the three AI provider variables are configured. A direct provider-adapter smoke check returned a valid reply after the JSON transport fix; generation through the production HRMS deployment remains unverified. The owner must still enable AI in their workspace Settings. Owner-only connection diagnostics now check the live model catalogue without sending HR records. Email, scheduled processing, MFA/backup encryption keys and the media worker remain unconfigured according to the owner setup diagnostics. Local tests do not certify those live services.
 
 ## Open completion gates
 

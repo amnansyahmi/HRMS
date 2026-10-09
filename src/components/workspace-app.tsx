@@ -22,6 +22,8 @@ import {
   LogOut,
   Loader2,
   ArrowUpRight,
+  Download,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -294,6 +296,12 @@ function Sidebar({
       </nav>
       <div className="sidebar-bottom">
         <button
+          onClick={() => window.dispatchEvent(new Event("nonymauz-install"))}
+        >
+          <Download size={17} />
+          Install app
+        </button>
+        <button
           className={page === "settings" ? "active" : ""}
           onClick={() => go("settings")}
         >
@@ -546,7 +554,13 @@ export function WorkspaceApp({
                   <PanelLeftOpen size={19} />
                 </Button>
               ) : null}
-              <span>{labels[visiblePage]}</span>
+              <span className="topbar-workspace">{workspace.company.name}</span>
+              <ChevronRight
+                className="topbar-divider"
+                size={14}
+                aria-hidden="true"
+              />
+              <span className="topbar-title">{labels[visiblePage]}</span>
             </div>
             <div>
               <button
@@ -592,13 +606,17 @@ export function WorkspaceApp({
               <button
                 key={item.page}
                 className={page === item.page ? "active" : ""}
+                aria-current={page === item.page ? "page" : undefined}
                 onClick={() => go(item.page)}
               >
                 <item.icon size={19} />
                 <span>{item.label}</span>
               </button>
             ))}
-            <button onClick={() => setMobileOpen(true)}>
+            <button
+              aria-expanded={mobileOpen}
+              onClick={() => setMobileOpen(true)}
+            >
               <PanelLeftOpen size={19} />
               <span>More</span>
             </button>
