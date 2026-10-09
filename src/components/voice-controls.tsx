@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Mic, Square, Volume2 } from "lucide-react";
 import { toast } from "sonner";
+import { Popover } from "radix-ui";
 import { Button } from "./ui/button";
 type SpeechResult = { isFinal: boolean; 0: { transcript: string } };
 type Recognition = {
@@ -32,9 +33,11 @@ function recognitionConstructor() {
 export function Dictation({
   onTranscript,
   disabled,
+  compact = false,
 }: {
   onTranscript: (text: string) => void;
   disabled?: boolean;
+  compact?: boolean;
 }) {
   const supported = useSyncExternalStore(
     subscribe,
@@ -43,7 +46,8 @@ export function Dictation({
   );
   const recognition = useRef<Recognition | null>(null),
     [listening, setListening] = useState(false),
-    [lang, setLang] = useState("en-MY");
+    [lang, setLang] = useState("en-MY"),
+    [optionsOpen, setOptionsOpen] = useState(false);
   useEffect(
     () => () => {
       if (recognition.current) {
@@ -92,6 +96,82 @@ export function Dictation({
       toast.error("Could not start dictation");
     }
   }
+  if (compact)
+    return (
+      <Popover.Root open={optionsOpen} onOpenChange={setOptionsOpen}>
+        {listening ? (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label="Stop dictation"
+            aria-pressed={true}
+            onClick={() => recognition.current?.stop()}
+          >
+            <Square size={17} />
+          </Button>
+        ) : (
+          <Popover.Trigger asChild>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              disabled={disabled || !supported}
+              aria-label="Voice input"
+              title={
+                supported
+                  ? "Dictate a message"
+                  : "Dictation unavailable in this browser"
+              }
+            >
+              <Mic size={18} />
+            </Button>
+          </Popover.Trigger>
+        )}
+        <Popover.Portal>
+          <Popover.Content
+            className="chat-options-popover voice-options-popover"
+            align="end"
+            side="top"
+            sideOffset={12}
+            collisionPadding={16}
+          >
+            <h2>Voice input</h2>
+            <label className="chat-option-field">
+              <span>Language</span>
+              <select
+                className="native-select"
+                aria-label="Voice language"
+                value={lang}
+                onChange={(e) => setLang(e.target.value)}
+              >
+                <option value="en-MY">English</option>
+                <option value="ms-MY">Bahasa Melayu</option>
+              </select>
+            </label>
+            <p>
+              Your browser’s speech service converts audio to text. Review it
+              before sending.
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              disabled={disabled || !supported}
+              onClick={() => {
+                start();
+                setOptionsOpen(false);
+              }}
+            >
+              <Mic size={15} />
+              Dictate message
+            </Button>
+          </Popover.Content>
+        </Popover.Portal>
+        <span className="sr-only" role="status">
+          {listening ? "Listening" : "Microphone stopped"}
+        </span>
+      </Popover.Root>
+    );
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2 items-center">
@@ -132,7 +212,13 @@ export function Dictation({
     </div>
   );
 }
-export function ReadAnswer({ text }: { text: string }) {
+export function ReadAnswer({
+  text,
+  compact = false,
+}: {
+  text: string;
+  compact?: boolean;
+}) {
   const supported = useSyncExternalStore(
     subscribe,
     () => "speechSynthesis" in window,
@@ -174,13 +260,15 @@ export function ReadAnswer({ text }: { text: string }) {
     <Button
       type="button"
       variant="ghost"
-      size="sm"
+      size={compact ? "icon-sm" : "sm"}
+      aria-label={speaking ? "Stop reading" : "Read aloud"}
+      title={speaking ? "Stop reading" : "Read aloud"}
       disabled={!supported}
       aria-pressed={speaking}
       onClick={speak}
     >
       {speaking ? <Square size={14} /> : <Volume2 size={14} />}
-      {speaking ? "Stop reading" : "Read aloud"}
+      {compact ? null : speaking ? "Stop reading" : "Read aloud"}
     </Button>
   );
 }

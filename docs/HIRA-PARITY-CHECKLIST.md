@@ -32,15 +32,15 @@ Reviewed 9 October 2026. The target is every publicly documented HIRA HR workflo
 
 ## Release and live readiness
 
-PRs #3 and #4 were merged into earlier feature branches rather than `main`. This branch consolidates their work and targets `main` directly so those workflows can reach the deployed code together.
+PR #5 consolidated the workflows from PRs #3 and #4 into `main`. The minimal People AI chat layout is a separate update built on that merged release.
 
-The last production inspection found `APP_URL` configured but `DATABASE_URL` missing. No Neon database was created: the sign-in fallback was blocked by approval review and has not been resumed without an explicitly confirmed login choice. AI credentials, SMTP, encryption keys, maintenance scheduling and media worker readiness also remain deployment requirements. Local tests do not certify those live services.
+Production checks on 9 October 2026 now pass for `/api/health`, demo login and workspace loading. The Neon project `aged-hill-18142778` has separate production and preview branches with the 19-table HR schema. `APP_URL`, `DATABASE_URL` and the three AI provider variables are configured. Live model generation has not been certified; the owner must still enable AI in their workspace Settings. Email, scheduled processing, MFA/backup encryption keys and the media worker remain unconfigured according to the owner setup diagnostics. Local tests do not certify those live services.
 
 ## Open completion gates
 
 1. Obtain working current official EA/CP22/CP22A templates and guidance, implement the additional fields and export mappings, and render/check filled outputs. Keep existing downloads labelled as preparation worksheets until that work passes.
 2. Integrate a documented ai-nonymauz-cloud realtime interface for full HR voice sessions. Existing chat-completions compatibility does not establish realtime protocol support.
-3. Complete authorized Neon/Vercel setup and verify the complete live login, persistence, AI, email, OCR, transcription and scheduler flows.
+3. Verify live AI generation, email delivery, OCR, transcription, scheduled processing and backup/restore. Database connectivity and demo login are now verified; this does not certify every production workflow.
 4. Review private HIRA workflows if exact screen-by-screen parity is required. Public information does not reveal proprietary internals or every integration.
 
 These are completion gates, not items silently counted as finished. Other Kuasa products (marketing, accounting and non-HR C-Suite agents) remain outside the user's HR-only scope.
