@@ -668,6 +668,12 @@ import {
   consumeAccountToken,
 } from "@/lib/account";
 import { saveAIProposal, confirmAIProposal } from "@/lib/ai-actions";
+import { cancelAIProposal } from "@/lib/ai-actions";
+import { pendingInvitations, revokeInvitation } from "@/lib/access";
+import { holidaysForState, parseHolidayCSV } from "@/lib/holidays";
+import { hrBrief } from "@/lib/hr-brief";
+import { hrReadFacts } from "@/lib/hr-read-facts";
+import { resumeEvidence, skillsRubric } from "@/lib/resume-evidence";
 import {
   uploadAudioPart,
   audioResponse,
@@ -972,12 +978,13 @@ describe("expanded HR workflows", () => {
     const result = (await operation(owner, "candidate-hire", {
       id: candidate.id,
       data: { startDate: "2026-11-01", salary: 4500 },
-    })) as { employeeId: string };
+    })) as { employeeId: string; invitationUrl?: string };
+    expect(result.invitationUrl).toMatch(/\/invite\/[a-f0-9]{64}$/);
     const second = await operation(owner, "candidate-hire", {
       id: candidate.id,
       data: { startDate: "2026-11-01", salary: 9000 },
     });
-    expect(second).toEqual(result);
+    expect(second).toEqual({ employeeId: result.employeeId });
     expect((await recordById(owner, result.employeeId)).data).toMatchObject({
       status: "Onboarding",
       salary: 4500,
@@ -1436,5 +1443,1766 @@ describe("expanded HR workflows", () => {
       records.filter((r) => String(r.data.title).startsWith(seed)),
     ).toHaveLength(510);
     expect(records.every((r) => r.company_id === owner.companyId)).toBe(true);
+  });
+});
+
+import { getCompany } from "@/lib/auth";
+import { saveCompanyConfig, setPayrollAccess } from "@/lib/company-config";
+import { resubmitClaim } from "@/lib/claims";
+import { refreshPayroll, recalculatePayroll } from "@/lib/hr";
+import { filterAIRecords } from "@/lib/ai-policy";
+
+import { extendedFields } from "@/components/extended-fields";
+const proposalText = (
+  action: string,
+  data: Record<string, unknown>,
+  recordId?: string,
+) =>
+  "Review this change.\n```hr-action\n" +
+  JSON.stringify({ action, data, recordId, label: "Confirm proposed change" }) +
+  "\n```";
+const settingsWith = async (patch: Record<string, unknown>) => {
+  const company = await getCompany(owner);
+  await saveCompanyConfig(owner, {
+    name: company.name,
+    settings: { ...company.settings, ...patch },
+  });
+  return company;
+};
+describe("workflow completion", () => {
+  it("uses schema-compatible equipment fields in the actual form", () => {
+    expect(extendedFields.asset!.map((field) => field.key)).toEqual(
+      expect.arrayContaining(["serial", "issuedDate", "returnedDate"]),
+    );
+    expect(
+      extendedFields.asset!.some((field) =>
+        ["serialNo", "issuedOn", "returnedOn"].includes(field.key),
+      ),
+    ).toBe(false);
+  });
+  it("returns a claim with a reason and resubmits the same record with protected history", async () => {
+    const e = await freshEmployee(),
+      claimant = asEmployee(e),
+      claim = await createRecord(claimant, "claim", { data: expense() });
+    await expect(
+      reviewRequest(owner, { id: claim.id, decision: "Returned", note: " " }),
+    ).rejects.toThrow("reason");
+    await reviewRequest(owner, {
+      id: claim.id,
+      decision: "Returned",
+      note: "Correct the amount",
+    });
+    const returned = await recordById(owner, claim.id);
+    await expect(
+      resubmitClaim(owner, {
+        id: claim.id,
+        updatedAt: returned.updated_at,
+        data: { amount: 20 },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      resubmitClaim(claimant, {
+        id: claim.id,
+        updatedAt: claim.updated_at,
+        data: { amount: 20 },
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      resubmitClaim(
+        { ...claimant, companyId: other.companyId },
+        { id: claim.id, updatedAt: returned.updated_at, data: { amount: 20 } },
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    const result = await resubmitClaim(claimant, {
+      id: claim.id,
+      updatedAt: returned.updated_at,
+      data: {
+        amount: 20,
+        status: "Paid",
+        history: [],
+        reviewedBy: owner.userId,
+        approvalStep: 2,
+        payrollId: randomUUID(),
+      },
+    });
+    expect(result.id).toBe(claim.id);
+    expect(result.data.payrollId).toBeUndefined();
+    expect(result.data).toMatchObject({
+      status: "Pending",
+      amount: 20,
+      reviewedBy: null,
+      approvalStep: 0,
+    });
+    expect(
+      (result.data.history as { action: string; note: string }[]).map(
+        (event) => event.action,
+      ),
+    ).toEqual(["Submitted", "Returned", "Resubmitted"]);
+    expect((result.data.history as { note: string }[])[1].note).toBe(
+      "Correct the amount",
+    );
+    await expect(
+      resubmitClaim(claimant, {
+        id: claim.id,
+        updatedAt: result.updated_at,
+        data: { amount: 1 },
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    await reviewRequest(owner, { id: claim.id, decision: "Approved" });
+    expect((await recordById(owner, claim.id)).data.status).toBe("Approved");
+  });
+  it("rechecks claim policy limits when a returned claim is corrected", async () => {
+    const e = await freshEmployee(),
+      policy = await createRecord(owner, "claim_type", {
+        data: {
+          name: "Correction limit",
+          limit: 40,
+          period: "Per request",
+          receiptRequired: false,
+        },
+      });
+    const claim = await createRecord(asEmployee(e), "claim", {
+      data: expense("2026-10-08", { claimTypeId: policy.id }),
+    });
+    await reviewRequest(owner, {
+      id: claim.id,
+      decision: "Returned",
+      note: "Check total",
+    });
+    const returned = await recordById(owner, claim.id);
+    await expect(
+      resubmitClaim(asEmployee(e), {
+        id: claim.id,
+        updatedAt: returned.updated_at,
+        data: { amount: 41 },
+      }),
+    ).rejects.toThrow("limit");
+    expect((await recordById(owner, claim.id)).data.status).toBe("Returned");
+  });
+  it("adds reusable designations and custom statuses while protecting in-use access semantics", async () => {
+    const original = await getCompany(owner);
+    const statuses = [
+      ...original.settings.employeeStatuses,
+      { name: "Permanent", access: "Active" as const },
+    ];
+    await saveCompanyConfig(owner, {
+      name: original.name,
+      settings: {
+        ...original.settings,
+        employeeStatuses: statuses,
+        employeeTypes: [...original.settings.employeeTypes, "Apprentice"],
+      },
+    });
+    const designation = await createRecord(owner, "designation", {
+      data: { name: "Staff engineer" },
+    });
+    let e = await freshEmployee({
+      designationId: designation.id,
+      employmentStatus: "Permanent",
+      employmentType: "Apprentice",
+    });
+    expect(e.data).toMatchObject({
+      title: "Staff engineer",
+      employmentStatus: "Permanent",
+      status: "Active",
+    });
+    await expect(
+      saveCompanyConfig(employeeActor(), {
+        name: original.name,
+        settings: original.settings,
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      saveCompanyConfig(owner, {
+        name: original.name,
+        settings: {
+          ...original.settings,
+          employeeStatuses: [
+            ...original.settings.employeeStatuses,
+            { name: "Permanent", access: "Archived" },
+          ],
+          employeeTypes: [...original.settings.employeeTypes, "Apprentice"],
+        },
+      }),
+    ).rejects.toThrow("in-use");
+    await expect(
+      saveCompanyConfig(owner, {
+        name: original.name,
+        settings: original.settings,
+      }),
+    ).rejects.toThrow("in-use");
+    e = await updateRecord(owner, "employee", e.id, {
+      updatedAt: e.updated_at,
+      data: { employmentStatus: "Active", employmentType: "Full-time" },
+    });
+    await saveCompanyConfig(owner, {
+      name: original.name,
+      settings: original.settings,
+    });
+    e = await updateRecord(owner, "employee", e.id, {
+      updatedAt: e.updated_at,
+      data: { employmentStatus: "Resigned", endDate: "2026-10-08" },
+    });
+    expect(e.data.status).toBe("Archived");
+    await expect(clock(asEmployee(e), { action: "in" })).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+  it("separates payroll reading, preparation, approval and payments", async () => {
+    const e = await freshEmployee(),
+      viewer = { ...asEmployee(e), payrollAccess: ["read"] as const };
+    await expect(
+      generatePayroll(
+        { ...viewer, payrollAccess: ["read"] },
+        { period: "2028-01" },
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    const preparer: Actor = {
+      ...asEmployee(e),
+      payrollAccess: ["read", "prepare"],
+    };
+    await generatePayroll(preparer, { period: "2028-01", employeeId: e.id });
+    const draft = (await visibleRecords(preparer)).find(
+      (r) =>
+        r.kind === "payroll" &&
+        r.employee_id === e.id &&
+        r.data.period === "2028-01",
+    )!;
+    expect(draft).toBeDefined();
+    await expect(
+      updateRecord(
+        { ...asEmployee(e), payrollAccess: ["read"] },
+        "payroll",
+        draft.id,
+        { updatedAt: draft.updated_at, data: { reviewed: true } },
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    await updateRecord(preparer, "payroll", draft.id, {
+      updatedAt: draft.updated_at,
+      data: { reviewed: true },
+    });
+    await expect(
+      publishPayroll(preparer, { period: "2028-01" }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      publishPayroll(
+        { ...preparer, payrollAccess: ["read", "approve"] },
+        { period: "2028-01" },
+      ),
+    ).rejects.toThrow("Another payroll approver");
+    await publishPayroll(owner, { period: "2028-01" });
+    expect(
+      (await visibleRecords({ ...owner, role: "hr", payrollAccess: [] })).some(
+        (r) => r.id === draft.id,
+      ),
+    ).toBe(false);
+    const claim = await createRecord(asEmployee(e), "claim", {
+      data: expense(),
+    });
+    await reviewRequest(owner, { id: claim.id, decision: "Approved" });
+    await expect(
+      reviewRequest(
+        { ...owner, role: "hr", payrollAccess: ["read"] },
+        { id: claim.id, decision: "Paid" },
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+  it("persists payroll grants in membership and refreshes them for each session", async () => {
+    await expect(
+      setPayrollAccess(employeeActor(), {
+        userId: employeeUserId,
+        permissions: ["read"],
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      setPayrollAccess(owner, { userId: other.userId, permissions: ["read"] }),
+    ).rejects.toMatchObject({ status: 404 });
+    await setPayrollAccess(owner, {
+      userId: employeeUserId,
+      permissions: ["prepare"],
+    });
+    await createSession(employeeUserId, owner.companyId);
+    expect((await getActor()).payrollAccess).toEqual(["read", "prepare"]);
+    await setPayrollAccess(owner, { userId: employeeUserId, permissions: [] });
+    expect((await getActor()).payrollAccess).toEqual([]);
+  });
+  it("prepares weekly and fortnightly runs with dated proration and overlap protection", async () => {
+    const e = await freshEmployee({ salary: 3100 });
+    const weekly = await generatePayroll(owner, {
+      cycle: "Weekly",
+      startDate: "2027-01-01",
+      endDate: "2027-01-07",
+      payDate: "2027-01-08",
+      employeeId: e.id,
+    });
+    const weeklyDraft = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === weekly.runId,
+    )!;
+    expect(weeklyDraft.data).toMatchObject({
+      base: 700,
+      cycle: "Weekly",
+      period: "2027-01",
+      statutoryMode: "Manual",
+    });
+    expect(
+      (await generatePayroll(owner, { runId: weekly.runId! })).created,
+    ).toBe(0);
+    await expect(
+      generatePayroll(owner, {
+        cycle: "Weekly",
+        startDate: "2027-01-07",
+        endDate: "2027-01-13",
+        employeeId: e.id,
+      }),
+    ).rejects.toThrow("overlap");
+    await expect(
+      generatePayroll(owner, {
+        cycle: "Weekly",
+        startDate: "2027-01-09",
+        endDate: "2027-01-13",
+        employeeId: e.id,
+      }),
+    ).rejects.toThrow("7 days");
+    const fortnight = await generatePayroll(owner, {
+      cycle: "Fortnightly",
+      startDate: "2027-01-29",
+      endDate: "2027-02-11",
+      payDate: "2027-02-12",
+      employeeId: e.id,
+    });
+    const draft = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === fortnight.runId,
+    )!;
+    expect(Number(draft.data.base)).toBeCloseTo(3 * 100 + (11 * 3100) / 28, 2);
+    expect(draft.data.period).toBe("2027-02");
+    await updateRecord(owner, "payroll", weeklyDraft.id, {
+      updatedAt: weeklyDraft.updated_at,
+      data: { reviewed: true },
+    });
+    await publishPayroll(owner, { runId: weekly.runId! });
+    expect((await recordById(owner, draft.id)).data.status).toBe("Draft");
+    expect((await recordById(owner, weekly.runId!)).data.status).toBe(
+      "Published",
+    );
+    const published = (await visibleRecords(asEmployee(e))).filter(
+      (r) => r.kind === "payroll",
+    );
+    expect(published.map((r) => r.id)).toContain(weeklyDraft.id);
+  });
+  it("uses off-cycle pay without duplicate salary and allows final settlement for leavers", async () => {
+    let e = await freshEmployee({ salary: 3100, endDate: "2026-10-09" });
+    const off = await generatePayroll(owner, {
+      cycle: "Off-cycle",
+      startDate: "2026-10-01",
+      endDate: "2026-10-09",
+      employeeId: e.id,
+    });
+    const offDraft = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === off.runId,
+    )!;
+    expect(offDraft.data.base).toBe(0);
+    e = await updateRecord(owner, "employee", e.id, {
+      updatedAt: e.updated_at,
+      data: { employmentStatus: "Resigned" },
+    });
+    await expect(
+      generatePayroll(owner, {
+        cycle: "Final settlement",
+        startDate: "2026-10-01",
+        endDate: "2026-10-09",
+      }),
+    ).rejects.toThrow("one employee");
+    const final = await generatePayroll(owner, {
+      cycle: "Final settlement",
+      startDate: "2026-10-01",
+      endDate: "2026-10-09",
+      employeeId: e.id,
+    });
+    const draft = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === final.runId,
+    )!;
+    expect(draft.data.base).toBe(900);
+    await updateRecord(owner, "payroll", draft.id, {
+      updatedAt: draft.updated_at,
+      data: { reviewed: true },
+    });
+    await publishPayroll(owner, { runId: final.runId! });
+  });
+  it("refreshes changed payroll inputs and removes stale payment references", async () => {
+    const e = await freshEmployee();
+    const claim = await createRecord(asEmployee(e), "claim", {
+      data: expense("2026-08-01"),
+    });
+    await reviewRequest(owner, { id: claim.id, decision: "Approved" });
+    const run = await generatePayroll(owner, {
+      cycle: "Off-cycle",
+      startDate: "2026-08-01",
+      endDate: "2026-08-05",
+      employeeId: e.id,
+    });
+    const draft = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === run.runId,
+    )!;
+    await operation(owner, "voucher-prepare", {
+      id: claim.id,
+      data: { recordIds: [claim.id], title: "Claim payment" },
+    });
+    await updateRecord(owner, "payroll", draft.id, {
+      updatedAt: draft.updated_at,
+      data: { bonus: 100, reviewed: true },
+    });
+    await expect(publishPayroll(owner, { runId: run.runId! })).rejects.toThrow(
+      "another payment",
+    );
+    const refreshed = await refreshPayroll(owner, { id: draft.id });
+    expect(refreshed).toMatchObject({
+      bonus: 100,
+      reimbursements: 0,
+      reviewed: false,
+      inputRecordIds: [],
+    });
+  });
+  it("reconciles statutory bands once for the month and subtracts interim deductions", async () => {
+    const e = await freshEmployee({
+      salary: 3100,
+      taxProfileVerified: true,
+      epfCategory: "Part A",
+      socsoCategory: "First",
+      taxResident: true,
+      taxScheme: "Standard",
+      eisEligible: true,
+    });
+    const first = await generatePayroll(owner, {
+      cycle: "Fortnightly",
+      startDate: "2026-03-01",
+      endDate: "2026-03-14",
+      payDate: "2026-03-14",
+      employeeId: e.id,
+    });
+    const draft1 = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === first.runId,
+    )!;
+    await expect(recalculatePayroll(owner, { id: draft1.id })).rejects.toThrow(
+      "interim",
+    );
+    await updateRecord(owner, "payroll", draft1.id, {
+      updatedAt: draft1.updated_at,
+      data: { epfEmployee: 154, epfEmployer: 182, reviewed: true },
+    });
+    await publishPayroll(owner, { runId: first.runId! });
+    const last = await generatePayroll(owner, {
+      cycle: "Final settlement",
+      startDate: "2026-03-15",
+      endDate: "2026-03-31",
+      payDate: "2026-03-31",
+      employeeId: e.id,
+    });
+    const draft2 = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === last.runId,
+    )!;
+    const result = await recalculatePayroll(owner, { id: draft2.id });
+    expect(Number(result.epfEmployee) + 154).toBe(341);
+    expect(Number(result.epfEmployer) + 182).toBe(403);
+    expect(result.statutoryMode).toBe("Reconciled");
+    expect((result.calculation as Record<string, unknown>).taxableNormal).toBe(
+      1700,
+    );
+    expect(
+      (result.calculation as Record<string, unknown>).priorPayslipIds,
+    ).toEqual([draft1.id]);
+  });
+  it("enforces specialist read controls and rejects tools disabled after card preparation", async () => {
+    const original = await settingsWith({
+      aiEnabled: true,
+      aiActionsEnabled: true,
+    });
+    try {
+      const e = await freshEmployee(),
+        claim = await createRecord(asEmployee(e), "claim", { data: expense() });
+      const card = await saveAIProposal(
+        owner,
+        proposalText("review", { decision: "Approved" }, claim.id),
+        [claim],
+        "claims",
+      );
+      expect(card.cards).toHaveLength(1);
+      const current = await getCompany(owner);
+      await settingsWith({
+        aiSpecialists: {
+          ...current.settings.aiSpecialists,
+          claims: { enabled: true, tools: ["read"] },
+          payroll: { enabled: false, tools: [] },
+        },
+      });
+      await expect(
+        confirmAIProposal(owner, { id: card.cards[0].id }),
+      ).rejects.toMatchObject({ status: 403 });
+      expect((await recordById(owner, claim.id)).data.status).toBe("Pending");
+      expect(
+        (
+          await saveAIProposal(
+            owner,
+            proposalText("review", { decision: "Approved" }, claim.id),
+            [claim],
+            "claims",
+          )
+        ).cards,
+      ).toHaveLength(0);
+      const filtered = filterAIRecords((await getCompany(owner)).settings, [
+        e,
+        { ...e, kind: "payroll" },
+      ]);
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0].data.salary).toBeUndefined();
+    } finally {
+      await saveCompanyConfig(owner, {
+        name: original.name,
+        settings: original.settings,
+      });
+    }
+  });
+  it("allows owner-only reminder configuration cards with exact previews and stale-settings checks", async () => {
+    const original = await getCompany(owner);
+    await settingsWith({
+      aiEnabled: true,
+      aiActionsEnabled: true,
+      aiSpecialists: {
+        ...original.settings.aiSpecialists,
+        attendance: { enabled: true, tools: ["read", "clock", "configure"] },
+      },
+    });
+    try {
+      expect(
+        (
+          await saveAIProposal(
+            employeeActor(),
+            proposalText("configure", { clockReminderMinutes: 20 }),
+            [],
+            "attendance",
+          )
+        ).cards,
+      ).toHaveLength(0);
+      expect(
+        (
+          await saveAIProposal(
+            owner,
+            proposalText("configure", {
+              clockReminderMinutes: 20,
+              aiEnabled: false,
+            }),
+            [],
+            "attendance",
+          )
+        ).cards,
+      ).toHaveLength(0);
+      const card = await saveAIProposal(
+        owner,
+        proposalText("configure", { clockReminderMinutes: 20 }),
+        [],
+        "attendance",
+      );
+      expect(card.cards[0].preview).toEqual({ clockReminderMinutes: 20 });
+      await settingsWith({ clockReminderMinutes: 25 });
+      await expect(
+        confirmAIProposal(owner, { id: card.cards[0].id }),
+      ).rejects.toMatchObject({ status: 409 });
+      const fresh = await saveAIProposal(
+        owner,
+        proposalText("configure", { clockReminderMinutes: 20 }),
+        [],
+        "attendance",
+      );
+      await confirmAIProposal(owner, { id: fresh.cards[0].id });
+      expect((await getCompany(owner)).settings.clockReminderMinutes).toBe(20);
+    } finally {
+      await saveCompanyConfig(owner, {
+        name: original.name,
+        settings: original.settings,
+      });
+    }
+  });
+  it("uses only fresh confirmation coordinates for AI clock-in and prevents replay", async () => {
+    const original = await settingsWith({
+      aiEnabled: true,
+      aiActionsEnabled: true,
+    });
+    try {
+      const e = await freshEmployee(),
+        actor = asEmployee(e),
+        site = await createRecord(owner, "location", {
+          data: {
+            name: "Verified site",
+            geofence: true,
+            latitude: 3.1,
+            longitude: 101.6,
+            radius: 100,
+          },
+        });
+      const text = proposalText("clock", {
+        action: "in",
+        locationId: site.id,
+        coordinates: { latitude: 3.1, longitude: 101.6, accuracy: 5 },
+      });
+      const card = await saveAIProposal(actor, text, [site], "attendance");
+      expect(card.cards[0].requiresLocation).toBe(true);
+      expect(card.cards[0].preview.coordinates).toBeUndefined();
+      await expect(
+        confirmAIProposal(actor, { id: card.cards[0].id }),
+      ).rejects.toThrow("phone location");
+      const fresh = await saveAIProposal(actor, text, [site], "attendance");
+      await confirmAIProposal(actor, {
+        id: fresh.cards[0].id,
+        coordinates: { latitude: 3.1, longitude: 101.6, accuracy: 5 },
+      });
+      await expect(
+        confirmAIProposal(actor, { id: fresh.cards[0].id }),
+      ).rejects.toMatchObject({ status: 409 });
+      await clock(actor, { action: "out" });
+    } finally {
+      await saveCompanyConfig(owner, {
+        name: original.name,
+        settings: original.settings,
+      });
+    }
+  });
+  it("sends configured pre-shift reminders once and supports next-day midnight starts", async () => {
+    const original = await settingsWith({ clockReminderMinutes: 15 });
+    const e = await freshEmployee();
+    await db.query(
+      "UPDATE memberships SET employee_id=$1 WHERE company_id=$2 AND user_id=$3",
+      [e.id, owner.companyId, employeeUserId],
+    );
+    try {
+      await createRecord(owner, "shift", {
+        data: {
+          name: "Midnight rotation",
+          start: "00:05",
+          end: "08:05",
+          days: [1, 2, 3, 4, 5, 6, 0],
+          employeeIds: [e.id],
+          departmentIds: [],
+        },
+      });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-08T15:55:00Z")); // 23:55 Kuala Lumpur, ten minutes before tomorrow's shift.
+      await maintenance();
+      await maintenance();
+      const notifications = (
+        await db.query<{ body: string }>(
+          "SELECT body FROM notifications WHERE company_id=$1 AND user_id=$2 AND title='Your shift starts soon'",
+          [owner.companyId, employeeUserId],
+        )
+      ).rows;
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].body).toContain("2026-10-09");
+      await settingsWith({ clockReminderMinutes: 0 });
+      vi.setSystemTime(new Date("2026-10-09T15:55:00Z"));
+      await maintenance();
+      expect(
+        (
+          await db.query(
+            "SELECT id FROM notifications WHERE company_id=$1 AND user_id=$2 AND title='Your shift starts soon'",
+            [owner.companyId, employeeUserId],
+          )
+        ).rows,
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      await db.query(
+        "UPDATE memberships SET employee_id=$1 WHERE company_id=$2 AND user_id=$3",
+        [employee.id, owner.companyId, employeeUserId],
+      );
+      await saveCompanyConfig(owner, {
+        name: original.name,
+        settings: original.settings,
+      });
+    }
+  });
+});
+
+import { aiPolicyKey } from "@/lib/ai-policy";
+describe("payroll and assistant change guards", () => {
+  it("reconciles a monthly draft against a published bonus and rejects changed monthly totals", async () => {
+    const e = await freshEmployee({
+      salary: 3100,
+      taxProfileVerified: true,
+      epfCategory: "Part A",
+      socsoCategory: "First",
+      taxResident: true,
+      taxScheme: "Standard",
+      eisEligible: true,
+    });
+    const off = await generatePayroll(owner, {
+      cycle: "Off-cycle",
+      title: "First bonus",
+      startDate: "2026-04-01",
+      endDate: "2026-04-10",
+      employeeId: e.id,
+    });
+    const first = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === off.runId,
+    )!;
+    await updateRecord(owner, "payroll", first.id, {
+      updatedAt: first.updated_at,
+      data: { bonus: 100, epfEmployee: 11, epfEmployer: 13, reviewed: true },
+    });
+    await publishPayroll(owner, { runId: off.runId! });
+    await generatePayroll(owner, { period: "2026-04", employeeId: e.id });
+    let monthly = (await visibleRecords(owner)).find(
+      (r) =>
+        r.kind === "payroll" &&
+        !r.data.runId &&
+        r.data.period === "2026-04" &&
+        r.employee_id === e.id,
+    )!;
+    expect(monthly.data.epfEmployee).toBe(341);
+    expect(monthly.data.statutoryMode).toBe("Reconciled");
+    monthly = await updateRecord(owner, "payroll", monthly.id, {
+      updatedAt: monthly.updated_at,
+      data: { reviewed: true },
+    });
+    const secondRun = await generatePayroll(owner, {
+      cycle: "Off-cycle",
+      title: "Second bonus",
+      startDate: "2026-04-01",
+      endDate: "2026-04-10",
+      employeeId: e.id,
+    });
+    expect(secondRun.runId).not.toBe(off.runId);
+    const second = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === secondRun.runId,
+    )!;
+    await updateRecord(owner, "payroll", second.id, {
+      updatedAt: second.updated_at,
+      data: { bonus: 100, epfEmployee: 11, epfEmployer: 13, reviewed: true },
+    });
+    await publishPayroll(owner, { runId: secondRun.runId! });
+    await expect(publishPayroll(owner, { period: "2026-04" })).rejects.toThrow(
+      "Monthly totals changed",
+    );
+    await recalculatePayroll(owner, { id: monthly.id });
+    monthly = await recordById(owner, monthly.id);
+    await updateRecord(owner, "payroll", monthly.id, {
+      updatedAt: monthly.updated_at,
+      data: { reviewed: true },
+    });
+    await publishPayroll(owner, { period: "2026-04" });
+  });
+  it("hides old AI answers when specialist or payroll permissions change", async () => {
+    const original = await settingsWith({ aiEnabled: true });
+    const threadId = randomUUID();
+    try {
+      const current = await getCompany(owner);
+      await db.query(
+        "INSERT INTO ai_messages(id,company_id,user_id,thread_id,role,content,sources) VALUES($1,$2,$3,$4,'assistant','Authorized salary answer',$5)",
+        [
+          randomUUID(),
+          owner.companyId,
+          owner.userId,
+          threadId,
+          JSON.stringify([
+            {
+              id: employee.id,
+              kind: "employee",
+              label: "Employee",
+              policy: aiPolicyKey(current.settings, owner),
+            },
+          ]),
+        ],
+      );
+      expect(await aiHistory(owner, threadId)).toHaveLength(1);
+      expect(
+        await aiHistory(
+          {
+            ...owner,
+            role: "employee",
+            employeeId: employee.id,
+            payrollAccess: [],
+          },
+          threadId,
+        ),
+      ).toHaveLength(0);
+      await settingsWith({
+        aiSpecialists: {
+          ...current.settings.aiSpecialists,
+          payroll: { enabled: false, tools: [] },
+        },
+      });
+      expect(await aiHistory(owner, threadId)).toHaveLength(0);
+    } finally {
+      await saveCompanyConfig(owner, {
+        name: original.name,
+        settings: original.settings,
+      });
+    }
+  });
+});
+
+describe("specialist context routing", () => {
+  it("gives the recruitment specialist authorized candidates and honors disabled read controls", async () => {
+    const original = await settingsWith({ aiEnabled: true });
+    try {
+      const candidate = await createRecord(owner, "candidate", {
+        data: {
+          name: "Specialist context candidate",
+          email: "specialist-candidate@example.test",
+          consent: true,
+          jobId: job.id,
+          resume: "React specialist with testing experience",
+        },
+      });
+      const mock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: "specialist-test",
+              object: "chat.completion",
+              created: 1,
+              model: "test-alias",
+              choices: [
+                {
+                  index: 0,
+                  message: {
+                    role: "assistant",
+                    content: "Review the supplied candidate evidence.",
+                  },
+                  finish_reason: "stop",
+                },
+              ],
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 8,
+                total_tokens: 18,
+              },
+            }),
+            { headers: { "Content-Type": "application/json" } },
+          ),
+      );
+      vi.stubGlobal("fetch", mock);
+      const reply = await askAI(owner, {
+        mode: "recruitment",
+        message: "Review Specialist context candidate",
+      });
+      expect(reply.sources.map((source) => source.id)).toContain(candidate.id);
+      await expect(
+        askAI(employeeActor(), {
+          mode: "recruitment",
+          message: "Read candidates",
+        }),
+      ).rejects.toMatchObject({ status: 403 });
+      const current = await getCompany(owner);
+      await settingsWith({
+        aiSpecialists: {
+          ...current.settings.aiSpecialists,
+          recruitment: { enabled: true, tools: [] },
+        },
+      });
+      await expect(
+        askAI(owner, { mode: "recruitment", message: "Read candidates" }),
+      ).rejects.toMatchObject({ status: 403 });
+      expect(mock).toHaveBeenCalledTimes(1);
+    } finally {
+      await saveCompanyConfig(owner, {
+        name: original.name,
+        settings: original.settings,
+      });
+    }
+  });
+});
+
+describe("final scheduled payday", () => {
+  it("reconciles a weekly final payday before the calendar month ends", async () => {
+    const e = await freshEmployee({
+      salary: 3100,
+      taxProfileVerified: true,
+      epfCategory: "Part A",
+      socsoCategory: "First",
+      taxResident: true,
+      taxScheme: "Standard",
+      eisEligible: true,
+    });
+    const run = await generatePayroll(owner, {
+      cycle: "Weekly",
+      startDate: "2026-05-22",
+      endDate: "2026-05-28",
+      payDate: "2026-05-29",
+      finalInMonth: true,
+      employeeId: e.id,
+    });
+    const draft = (await visibleRecords(owner)).find(
+      (r) => r.kind === "payroll" && r.data.runId === run.runId,
+    )!;
+    expect(draft.data.finalInMonth).toBe(true);
+    expect(
+      (await recalculatePayroll(owner, { id: draft.id })).statutoryMode,
+    ).toBe("Reconciled");
+  });
+});
+
+import {
+  submitProfileChange,
+  reviewProfileChange,
+} from "@/lib/profile-changes";
+import { reviewOptions, approvalStage } from "@/lib/request-workflow";
+import { calendarEvents, calendarEmployees } from "@/lib/hr-calendar";
+import { exportCalendar } from "@/lib/calendar-export";
+import { appUrlIssue, deploymentChecks } from "@/lib/deployment-config";
+import { GET as exportGet } from "@/app/api/export/route";
+import { GET as setupGet } from "@/app/api/setup/route";
+
+describe("contact update requests", () => {
+  it("applies only reviewed contact changes and preserves employment fields", async () => {
+    const e = await freshEmployee({ phone: "0120000000" });
+    const request = await submitProfileChange(asEmployee(e), {
+      employeeUpdatedAt: e.updated_at,
+      changes: { phone: "0131234567", address: "New address" },
+      reason: "Moved house",
+    });
+    expect((await recordById(owner, e.id)).data.phone).toBe("0120000000");
+    expect(request.data.previous).toMatchObject({ phone: "0120000000" });
+    await expect(
+      reviewProfileChange(asEmployee(e), {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      reviewProfileChange(managerActor(), {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await reviewProfileChange(owner, {
+      id: request.id,
+      expectedUpdatedAt: request.updated_at,
+      decision: "Approved",
+      note: "Confirmed with employee",
+    });
+    const updated = await recordById(owner, e.id);
+    expect(updated.data).toMatchObject({
+      phone: "0131234567",
+      address: "New address",
+      salary: e.data.salary,
+      email: e.data.email,
+      status: e.data.status,
+    });
+    await expect(
+      reviewProfileChange(owner, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+  it("rejects unsupported fields, stale submissions and concurrent pending changes", async () => {
+    const e = await freshEmployee();
+    for (const changes of [
+      { salary: "1" },
+      { bankAccount: "123" },
+      { email: "changed@test.invalid" },
+      { managerId: owner.userId },
+    ])
+      await expect(
+        submitProfileChange(asEmployee(e), {
+          employeeUpdatedAt: e.updated_at,
+          changes,
+          reason: "Changed",
+        }),
+      ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: "old",
+        changes: { phone: "123" },
+        reason: "Changed",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: e.updated_at,
+        changes: { phone: "" },
+        reason: "No change",
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    const payload = {
+      employeeUpdatedAt: e.updated_at,
+      changes: { phone: "123" },
+      reason: "New phone",
+    };
+    const request = await submitProfileChange(asEmployee(e), payload);
+    await expect(
+      submitProfileChange(asEmployee(e), payload),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      updateRecord(owner, "profile_change", request.id, {
+        updatedAt: request.updated_at,
+        data: { status: "Approved" },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      createRecord(owner, "profile_change", {
+        employeeId: e.id,
+        data: request.data,
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+  it("does not overwrite contact fields that HR changed after submission", async () => {
+    const e = await freshEmployee(),
+      request = await submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: e.updated_at,
+        changes: { phone: "456" },
+        reason: "New phone",
+      });
+    await updateRecord(owner, "employee", e.id, {
+      updatedAt: e.updated_at,
+      data: { phone: "HR update" },
+    });
+    await expect(
+      reviewProfileChange(owner, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect((await recordById(owner, e.id)).data.phone).toBe("HR update");
+  });
+  it("allows unrelated HR changes and merges without losing them", async () => {
+    const e = await freshEmployee(),
+      request = await submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: e.updated_at,
+        changes: { address: "New home" },
+        reason: "Moved",
+      });
+    await updateRecord(owner, "employee", e.id, {
+      updatedAt: e.updated_at,
+      data: { title: "Senior Engineer" },
+    });
+    await reviewProfileChange(owner, {
+      id: request.id,
+      expectedUpdatedAt: request.updated_at,
+      decision: "Approved",
+    });
+    expect((await recordById(owner, e.id)).data).toMatchObject({
+      address: "New home",
+      title: "Senior Engineer",
+    });
+  });
+  it("keeps proposed details private from managers, colleagues and other tenants", async () => {
+    const e = await freshEmployee(),
+      request = await submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: e.updated_at,
+        changes: { address: "Private home" },
+        reason: "Moved",
+      });
+    expect(
+      (await visibleRecords(managerActor())).some((r) => r.id === request.id),
+    ).toBe(false);
+    expect(
+      (await visibleRecords(employeeActor())).some((r) => r.id === request.id),
+    ).toBe(false);
+    expect(
+      (await visibleRecords(asEmployee(e))).some((r) => r.id === request.id),
+    ).toBe(true);
+    await expect(
+      reviewProfileChange(other, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+  it("supports reasoned rejection, own cancellation and resubmission as a new request", async () => {
+    const e = await freshEmployee(),
+      payload = {
+        employeeUpdatedAt: e.updated_at,
+        changes: { phone: "789" },
+        reason: "Changed",
+      };
+    const request = await submitProfileChange(asEmployee(e), payload);
+    await expect(
+      reviewProfileChange(owner, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Rejected",
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      reviewProfileChange(owner, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Cancelled",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await reviewProfileChange(asEmployee(e), {
+      id: request.id,
+      expectedUpdatedAt: request.updated_at,
+      decision: "Cancelled",
+    });
+    const second = await submitProfileChange(asEmployee(e), payload);
+    await reviewProfileChange(owner, {
+      id: second.id,
+      expectedUpdatedAt: second.updated_at,
+      decision: "Rejected",
+      note: "Please confirm the number",
+    });
+    expect((await recordById(owner, e.id)).data.phone).toBe(e.data.phone);
+    expect((await recordById(owner, second.id)).data.reviewNote).toBe(
+      "Please confirm the number",
+    );
+  });
+});
+
+describe("approval inbox permissions", () => {
+  it("shows the manager and HR stages while withholding self approval", async () => {
+    const e = await freshEmployee(),
+      policy = await createRecord(owner, "claim_type", {
+        data: {
+          name: "Staged inbox",
+          limit: 100,
+          period: "Per request",
+          receiptRequired: false,
+          approval: "Manager then HR",
+        },
+      });
+    const claim = await createRecord(asEmployee(e), "claim", {
+      data: expense("2026-09-15", { claimTypeId: policy.id }),
+    });
+    let records = await visibleRecords(owner);
+    expect(approvalStage(claim, records)).toBe("Awaiting manager");
+    expect(reviewOptions(owner, claim, records)).not.toContain("Approved");
+    expect(reviewOptions(managerActor(), claim, records)).toContain("Approved");
+    expect(reviewOptions(asEmployee(e), claim, records)).toEqual(["Cancelled"]);
+    await reviewRequest(managerActor(), {
+      id: claim.id,
+      decision: "Approved",
+      expectedUpdatedAt: claim.updated_at,
+    });
+    const updated = await recordById(owner, claim.id);
+    records = await visibleRecords(owner);
+    expect(approvalStage(updated, records)).toBe("Awaiting HR");
+    expect(reviewOptions(managerActor(), updated, records)).not.toContain(
+      "Approved",
+    );
+    expect(reviewOptions(owner, updated, records)).toContain("Approved");
+    await expect(
+      reviewRequest(owner, {
+        id: claim.id,
+        decision: "Approved",
+        expectedUpdatedAt: claim.updated_at,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+  it("keeps HR-only approvals and linked claim payments out of unsupported controls", async () => {
+    const e = await freshEmployee(),
+      policy = await createRecord(owner, "claim_type", {
+        data: {
+          name: "HR-only inbox",
+          limit: 100,
+          period: "Per request",
+          receiptRequired: false,
+          approval: "HR only",
+        },
+      });
+    const claim = await createRecord(asEmployee(e), "claim", {
+        data: expense("2026-09-15", { claimTypeId: policy.id }),
+      }),
+      records = await visibleRecords(owner);
+    expect(reviewOptions(managerActor(), claim, records)).not.toContain(
+      "Approved",
+    );
+    expect(
+      reviewOptions(
+        owner,
+        {
+          ...claim,
+          data: { ...claim.data, status: "Approved", voucherId: randomUUID() },
+        },
+        records,
+      ),
+    ).not.toContain("Paid");
+    expect(reviewOptions(other, claim, records)).toEqual([]);
+  });
+});
+
+describe("scoped calendar and downloads", () => {
+  it("limits employees to themselves and managers to direct reports", async () => {
+    const records = await visibleRecords(owner);
+    expect(
+      calendarEmployees(employeeActor(), records).map((e) => e.id),
+    ).toEqual([employee.id]);
+    const team = calendarEmployees(managerActor(), records);
+    expect(team.some((e) => e.id === colleague.id)).toBe(false);
+    expect(
+      team.every(
+        (e) =>
+          e.id === managerEmployee.id ||
+          e.data.managerId === managerEmployee.id,
+      ),
+    ).toBe(true);
+  });
+  it("omits request reasons, medical types and pending events from exports", async () => {
+    const e = await freshEmployee(),
+      company = await getCompany(owner);
+    const request = await createRecord(asEmployee(e), "leave", {
+      data: {
+        ...leaveData("2026-11-02"),
+        type: "Sick",
+        reason: "Private diagnosis",
+      },
+    });
+    const records = await visibleRecords(owner),
+      pending = calendarEvents(
+        asEmployee(e),
+        company,
+        records,
+        "2026-11-01",
+        "2026-11-05",
+        "mine",
+        true,
+      );
+    expect(pending.some((ev) => ev.recordId === request.id)).toBe(true);
+    expect(exportCalendar(pending, company.settings.timezone)).not.toContain(
+      request.id,
+    );
+    await reviewRequest(owner, { id: request.id, decision: "Approved" });
+    const approved = calendarEvents(
+      asEmployee(e),
+      company,
+      await visibleRecords(owner),
+      "2026-11-01",
+      "2026-11-05",
+      "mine",
+    );
+    const ics = exportCalendar(approved, company.settings.timezone);
+    expect(ics).toContain("Away");
+    expect(ics).not.toContain("Private diagnosis");
+    expect(ics).not.toContain("Sick");
+    expect(ics).toContain("DTSTART;VALUE=DATE:20261102");
+    expect(ics).toContain("DTEND;VALUE=DATE:20261103");
+  });
+  it("exports rotating overnight shifts in UTC and honors the same filters", async () => {
+    const e = await freshEmployee(),
+      company = await getCompany(owner);
+    const shift = await createRecord(owner, "shift", {
+      data: {
+        name: "Night",
+        start: "22:00",
+        end: "06:00",
+        days: [1, 2, 3, 4, 5],
+        employeeIds: [e.id],
+        anchorDate: "2026-11-02",
+        rotationWeeks: 2,
+        activeWeeks: [1],
+      },
+    });
+    const records = await visibleRecords(owner);
+    const events = calendarEvents(
+      asEmployee(e),
+      company,
+      records,
+      "2026-11-02",
+      "2026-11-09",
+      "mine",
+    );
+    expect(
+      events.some((ev) => ev.recordId === shift.id && ev.date === "2026-11-09"),
+    ).toBe(false);
+    const ics = exportCalendar(events, "Asia/Kuala_Lumpur");
+    expect(ics).toContain("DTSTART:20261102T140000Z");
+    expect(ics).toContain("DTEND:20261102T220000Z");
+    expect(
+      calendarEvents(
+        asEmployee(e),
+        company,
+        records,
+        "2026-11-02",
+        "2026-11-02",
+        "team",
+      ).every((ev) => !ev.employeeId || ev.employeeId === e.id),
+    ).toBe(true);
+  });
+  it("handles 24:00, escapes injection text and folds UTF-8 safely", () => {
+    const events = [
+      {
+        id: "test",
+        recordId: null,
+        employeeId: null,
+        date: "2026-11-02",
+        title: "漢".repeat(50) + "\nBEGIN:VEVENT;bad,slash\\",
+        kind: "time_off" as const,
+        status: "Approved",
+        start: "23:00",
+        end: "24:00",
+        overnight: false,
+      },
+    ];
+    const ics = exportCalendar(events, "Asia/Kuala_Lumpur");
+    expect(ics).toContain("DTEND:20261102T160000Z");
+    expect(ics.match(/\r\nBEGIN:VEVENT/g)).toHaveLength(1);
+    expect(
+      ics.split("\r\n").every((line) => Buffer.byteLength(line) <= 75),
+    ).toBe(true);
+    expect(ics).not.toContain("�");
+    expect(() =>
+      exportCalendar(
+        [{ ...events[0], date: "2026-03-08", start: "02:30", end: "03:30" }],
+        "America/New_York",
+      ),
+    ).toThrow("does not exist");
+  });
+  it("rejects oversized ranges and exports only authorized calendar records", async () => {
+    await createSession(employeeUserId, owner.companyId);
+    const response = await exportGet(
+      new Request(
+        "http://localhost:3000/api/export?type=calendar&start=2026-11-01&end=2026-11-30&scope=team",
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    const text = await response.text();
+    expect(text).not.toContain(String(colleague.data.name));
+    expect(
+      (
+        await exportGet(
+          new Request(
+            "http://localhost:3000/api/export?type=calendar&start=2026-01-01&end=2026-12-31",
+          ),
+        )
+      ).status,
+    ).toBe(400);
+    const company = await getCompany(owner);
+    expect(() =>
+      calendarEvents(owner, company, [], "2026-01-01", "2026-12-31"),
+    ).toThrow("1–62 days");
+    await createSession(owner.userId, owner.companyId);
+  });
+});
+
+describe("deployment diagnostics and notification reading", () => {
+  it("validates canonical URLs without disclosing their contents", () => {
+    expect(appUrlIssue({ NODE_ENV: "production" })).toContain("APP_URL");
+    for (const url of [
+      "not a url",
+      "http://example.test",
+      "https://user:secret@example.test",
+      "https://example.test/path",
+      "https://example.test/?secret=abc",
+    ])
+      expect(
+        appUrlIssue({ NODE_ENV: "production", APP_URL: url }),
+      ).toBeTruthy();
+    expect(
+      appUrlIssue({ NODE_ENV: "production", APP_URL: "https://example.test" }),
+    ).toBeNull();
+    expect(
+      appUrlIssue({
+        NODE_ENV: "development",
+        APP_URL: "http://localhost:3000",
+      }),
+    ).toBeNull();
+    const checks = JSON.stringify(
+      deploymentChecks({
+        DATABASE_URL: "private-db-url",
+        AI_NONYMAUZ_API_KEY: "private-token",
+        APP_URL: "https://private-domain.test",
+      }),
+    );
+    expect(checks).not.toContain("private-db-url");
+    expect(checks).not.toContain("private-token");
+    expect(checks).not.toContain("private-domain");
+  });
+  it("restricts setup checks to owners", async () => {
+    await createSession(employeeUserId, owner.companyId);
+    expect((await setupGet()).status).toBe(403);
+    await createSession(owner.userId, owner.companyId);
+    const response = await setupGet();
+    expect(response.status).toBe(200);
+    expect((await response.json()).databaseConnected).toBe(true);
+  });
+  it("marks only the requested user/company notification as read", async () => {
+    const id = randomUUID(),
+      second = randomUUID();
+    for (const notificationId of [id, second])
+      await db.query(
+        "INSERT INTO notifications(id,company_id,user_id,title,body,href) VALUES($1,$2,$3,'Test','Update','/?view=approvals')",
+        [notificationId, owner.companyId, owner.userId],
+      );
+    await expect(
+      operation(employeeActor(), "notification-read", { id }),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      operation(other, "notification-read", { id }),
+    ).rejects.toMatchObject({ status: 404 });
+    await operation(owner, "notification-read", { id });
+    await operation(owner, "notification-read", { id });
+    const rows = (
+      await db.query<{ id: string; read_at: string | null }>(
+        "SELECT id,read_at FROM notifications WHERE id=ANY($1::uuid[])",
+        [[id, second]],
+      )
+    ).rows;
+    expect(rows.find((r) => r.id === id)?.read_at).toBeTruthy();
+    expect(rows.find((r) => r.id === second)?.read_at).toBeNull();
+  });
+});
+
+describe("multi-run annual preparation worksheets", () => {
+  it("counts distinct published months separately from runs and includes commissions", async () => {
+    const e = await freshEmployee({ name: "Worksheet multi-run person" });
+    for (const day of ["01", "15"]) {
+      const run = await generatePayroll(owner, {
+        cycle: "Off-cycle",
+        startDate: `2026-03-${day}`,
+        endDate: `2026-03-${day}`,
+        payDate: `2026-03-${day}`,
+        employeeId: e.id,
+        title: `Worksheet bonus ${day}`,
+      });
+      const draft = (await visibleRecords(owner)).find(
+        (r) => r.kind === "payroll" && r.data.runId === run.runId,
+      )!;
+      await updateRecord(owner, "payroll", draft.id, {
+        updatedAt: draft.updated_at,
+        data: { bonus: 100, commission: 50, reviewed: true },
+      });
+      await publishPayroll(owner, { runId: run.runId! });
+    }
+    await createSession(owner.userId, owner.companyId);
+    const response = await exportGet(
+      new Request("http://localhost:3000/api/export?type=EA&year=2026"),
+    );
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const lines = text.split("\r\n"),
+      header = lines.find((l) =>
+        l.startsWith('"Employee","Email","Published months"'),
+      )!;
+    expect(header).toContain('"Published runs"');
+    expect(header).toContain('"commission (MYR)"');
+    const row = lines
+      .find((l) => l.startsWith('"Worksheet multi-run person"'))!
+      .split(",");
+    expect(row[2]).toBe('"1"');
+    expect(row[3]).toBe('"2"');
+    expect(row[header.split(",").indexOf('"commission (MYR)"')]).toBe('"100"');
+    expect(text).not.toContain('"NaN"');
+  });
+});
+
+describe("complete public HIRA workflows", () => {
+  it("reserves daily limits independently and groups trips across dates", async () => {
+    const e = await freshEmployee();
+    const daily = await createRecord(owner, "claim_type", {
+      data: {
+        name: "Daily meals",
+        limit: 100,
+        period: "Daily",
+        receiptRequired: false,
+      },
+    });
+    const claim = (date: string, extra = {}) =>
+      createRecord(asEmployee(e), "claim", {
+        data: expense(date, { claimTypeId: daily.id, amount: 70, ...extra }),
+      });
+    await claim("2026-10-01");
+    await expect(claim("2026-10-01")).rejects.toMatchObject({ status: 400 });
+    await claim("2026-10-02");
+    const trip = await createRecord(owner, "claim_type", {
+      data: {
+        name: "Trip budget",
+        limit: 100,
+        period: "Per trip",
+        receiptRequired: false,
+      },
+    });
+    await expect(claim("2026-10-03", { claimTypeId: trip.id })).rejects.toThrow(
+      "trip reference",
+    );
+    await claim("2026-10-03", {
+      claimTypeId: trip.id,
+      tripReference: "CLIENT-A",
+    });
+    await expect(
+      claim("2026-11-03", {
+        claimTypeId: trip.id,
+        tripReference: " client-a ",
+      }),
+    ).rejects.toThrow("balance");
+    await claim("2026-11-03", {
+      claimTypeId: trip.id,
+      tripReference: "CLIENT-B",
+    });
+  });
+  it("imports reviewed state holidays atomically, deduplicates and checks roles", async () => {
+    const sarawak = holidaysForState("Sarawak");
+    expect(sarawak.some((r) => r.title.includes("Deepavali"))).toBe(false);
+    expect(sarawak.filter((r) => r.title.includes("Gawai"))).toHaveLength(2);
+    const rows = [
+      {
+        title: "Import boundary holiday",
+        date: "2026-12-30",
+        state: "Sarawak",
+      },
+    ];
+    await expect(
+      operation(asEmployee(employee), "holidays-import", {
+        data: { rows, reviewed: true },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      operation(owner, "holidays-import", { data: { rows } }),
+    ).rejects.toThrow("Review");
+    await expect(
+      operation(owner, "holidays-import", {
+        data: {
+          rows: [...rows, { ...rows[0], date: "2026-02-30" }],
+          reviewed: true,
+        },
+      }),
+    ).rejects.toThrow();
+    expect(
+      (await visibleRecords(owner)).filter(
+        (r) => r.kind === "holiday" && r.data.title === rows[0].title,
+      ),
+    ).toHaveLength(0);
+    expect(
+      await operation(owner, "holidays-import", {
+        data: { rows: [...rows, ...rows], reviewed: true },
+      }),
+    ).toEqual({ created: 1, skipped: 1 });
+    expect(
+      await operation(owner, "holidays-import", {
+        data: { rows, reviewed: true },
+      }),
+    ).toEqual({ created: 0, skipped: 1 });
+    expect(
+      await operation(other, "holidays-import", {
+        data: { rows, reviewed: true },
+      }),
+    ).toEqual({ created: 1, skipped: 0 });
+    expect(
+      parseHolidayCSV(
+        'title,date,state\n"Holiday, reviewed",2026-12-31,National\n',
+      )[0].title,
+    ).toBe("Holiday, reviewed");
+  });
+  it("exposes invitation metadata only to owners and revokes the private link", async () => {
+    const e = await freshEmployee(),
+      rows = await pendingInvitations(owner),
+      invitation = rows.find((r) => r.employee_id === e.id)!;
+    expect(invitation).toBeDefined();
+    expect(invitation).not.toHaveProperty("token_hash");
+    await expect(pendingInvitations(asEmployee(e))).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(
+      revokeInvitation(other, { id: invitation.id }),
+    ).rejects.toMatchObject({ status: 404 });
+    await revokeInvitation(owner, { id: invitation.id });
+    expect(
+      new Date(
+        (await pendingInvitations(owner)).find((r) => r.id === invitation.id)!
+          .expires_at,
+      ).getTime(),
+    ).toBeLessThanOrEqual(Date.now());
+  });
+  it("saves exactly the reviewed AI letter wording and rejects incomplete drafts", async () => {
+    const previous = await settingsWith({
+      aiEnabled: true,
+      aiActionsEnabled: true,
+    });
+    try {
+      const e = await freshEmployee();
+      const data = {
+        title: "Reference reviewed by HR",
+        type: "Reference",
+        effectiveDate: "2026-10-09",
+        body: "Dear colleague,\n\nThis is the exact reviewed wording.\n\nHR team",
+      };
+      const incomplete = await saveAIProposal(
+        owner,
+        proposalText(
+          "letter-draft",
+          { type: "Reference", effectiveDate: data.effectiveDate },
+          e.id,
+        ),
+        [e],
+        "letters",
+      );
+      expect(incomplete.cards).toHaveLength(0);
+      const forbidden = await saveAIProposal(
+        asEmployee(e),
+        proposalText("letter-draft", data, e.id),
+        [e],
+        "letters",
+      );
+      expect(forbidden.cards).toHaveLength(0);
+      const proposal = await saveAIProposal(
+        owner,
+        proposalText("letter-draft", data, e.id),
+        [e],
+        "letters",
+      );
+      expect(proposal.cards[0].preview.body).toBe(data.body);
+      const result = await confirmAIProposal(owner, {
+        id: proposal.cards[0].id,
+      });
+      expect((result.result as HRRecord).data).toMatchObject({
+        ...data,
+        status: "Draft",
+      });
+      await expect(
+        confirmAIProposal(owner, { id: proposal.cards[0].id }),
+      ).rejects.toMatchObject({ status: 409 });
+    } finally {
+      await saveCompanyConfig(owner, {
+        name: previous.name,
+        settings: previous.settings,
+      });
+    }
+  });
+  it("prepares independent action cards and cancellation cannot mutate another card", async () => {
+    const previous = await settingsWith({
+      aiEnabled: true,
+      aiActionsEnabled: true,
+    });
+    try {
+      const e = await freshEmployee(),
+        a = await createRecord(asEmployee(e), "claim", { data: expense() }),
+        b = await createRecord(asEmployee(e), "claim", {
+          data: expense("2026-09-16"),
+        });
+      const text =
+        proposalText("review", { decision: "Approved" }, a.id) +
+        "\n" +
+        proposalText("review", { decision: "Approved" }, b.id);
+      const result = await saveAIProposal(owner, text, [a, b], "claims");
+      expect(result.cards).toHaveLength(2);
+      await expect(
+        cancelAIProposal(other, { id: result.cards[0].id }),
+      ).rejects.toMatchObject({ status: 409 });
+      await cancelAIProposal(owner, { id: result.cards[0].id });
+      await expect(
+        confirmAIProposal(owner, { id: result.cards[0].id }),
+      ).rejects.toMatchObject({ status: 409 });
+      await confirmAIProposal(owner, { id: result.cards[1].id });
+      expect((await recordById(owner, a.id)).data.status).toBe("Pending");
+      expect((await recordById(owner, b.id)).data.status).toBe("Approved");
+      expect(
+        (await saveAIProposal(owner, text, [a, b], "chro")).cards,
+      ).toHaveLength(0);
+    } finally {
+      await saveCompanyConfig(owner, {
+        name: previous.name,
+        settings: previous.settings,
+      });
+    }
+  });
+  it("computes the owner brief from full authorized records and observes payroll read controls", async () => {
+    const company = await getCompany(owner),
+      record = {
+        ...employee,
+        data: { ...employee.data, salary: 4321, departmentId: null },
+      };
+    const brief = hrBrief(
+      owner,
+      company,
+      [record, { ...record, id: randomUUID(), company_id: other.companyId }],
+      new Date("2026-10-08T17:00:00Z"),
+    );
+    expect(brief.date).toBe("2026-10-09");
+    expect(brief.headcount).toBe(1);
+    expect(brief.departments[0].monthlyBaseSalaryMYR).toBe(4321);
+    const restricted = {
+      ...company,
+      settings: {
+        ...company.settings,
+        aiSpecialists: {
+          ...company.settings.aiSpecialists,
+          payroll: { enabled: false, tools: [] },
+        },
+      },
+    };
+    expect(
+      hrBrief(owner, restricted, [record]).departments[0],
+    ).not.toHaveProperty("monthlyBaseSalaryMYR");
+    expect(hrBrief(owner, restricted, [record]).payrollRuns).toBeNull();
+    expect(() => hrBrief(asEmployee(employee), company, [record])).toThrow(
+      "owner",
+    );
+  });
+  it("scores only configured job skills with exact resume evidence and rejects fabricated quotations", () => {
+    const criteria = skillsRubric.parse([
+        { label: "React development", weight: 70 },
+        { label: "API implementation", weight: 30 },
+      ]),
+      resume = "Built React interfaces with measured performance improvements.";
+    const output = (quote: string) =>
+      "```resume-evidence\n" +
+      JSON.stringify([
+        { index: 0, grade: 3, quote, gap: "Confirm measurement" },
+        { index: 1, grade: 0, quote: "", gap: "Ask about APIs" },
+      ]) +
+      "\n```";
+    expect(resumeEvidence(output(resume), resume, criteria)).toContain(
+      "70/100",
+    );
+    expect(
+      resumeEvidence(output("Fabricated skill evidence"), resume, criteria),
+    ).not.toContain("70/100");
+    expect(
+      skillsRubric.safeParse([{ label: "Gender", weight: 1 }]).success,
+    ).toBe(false);
+    expect(resumeEvidence(output(resume), resume, criteria)).not.toContain(
+      "resume-evidence",
+    );
+  });
+});
+
+describe("deterministic assistant lookups", () => {
+  it("uses role-scoped reservations and withholds disabled specialist data", async () => {
+    const e = await freshEmployee(),
+      actor = asEmployee(e),
+      company = await getCompany(owner);
+    const policy = await createRecord(owner, "claim_type", {
+      data: {
+        name: "Lookup daily limit",
+        limit: 100,
+        period: "Daily",
+        receiptRequired: false,
+      },
+    });
+    await createRecord(actor, "claim", {
+      data: expense("2026-10-09", { claimTypeId: policy.id, amount: 30 }),
+    });
+    const visible = await visibleRecords(actor),
+      now = new Date("2026-10-08T17:00:00Z");
+    const facts = hrReadFacts(actor, company, visible, now);
+    expect(facts.date).toBe("2026-10-09");
+    expect(facts.pendingApprovalCount).toBe(0);
+    expect(
+      facts.ownClaimBalances?.find((r) => r.policyId === policy.id),
+    ).toMatchObject({ reservedOrPaidMYR: 30, availableMYR: 70 });
+    const restricted = {
+      ...company,
+      settings: {
+        ...company.settings,
+        aiSpecialists: {
+          ...company.settings.aiSpecialists,
+          payroll: { enabled: false, tools: [] },
+        },
+      },
+    };
+    const filtered = hrReadFacts(
+      actor,
+      restricted,
+      filterAIRecords(restricted.settings, visible),
+      now,
+    );
+    expect(filtered.ownOvertimeEstimateInputs).toBeNull();
+    expect(
+      filtered.ownClaimBalances?.find((r) => r.policyId === policy.id),
+    ).toMatchObject({ availableMYR: 70 });
   });
 });

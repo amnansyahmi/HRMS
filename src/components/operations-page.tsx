@@ -1,15 +1,7 @@
 "use client";
+import { hasPayroll } from "@/lib/workflow-config";
 import { useEffect, useState } from "react";
-import {
-  Plus,
-  Pencil,
-  Download,
-  Check,
-  X,
-  Copy,
-  Bell,
-  FileText,
-} from "lucide-react";
+import { Plus, Pencil, Download, Copy, Bell, FileText } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
@@ -25,6 +17,9 @@ import { PageHeader, Empty, Status, NativeSelect } from "./common";
 import { api, money, shortDate } from "@/lib/client";
 import { isStaff, type Kind, type HRRecord, type Data } from "@/lib/types";
 import { toast } from "sonner";
+import { reviewOptions } from "@/lib/request-workflow";
+import { RequestReviewDialog } from "./request-review";
+import { HolidayImport } from "./holiday-import";
 export type OperationsView =
   | "employee-files"
   | "work-requests"
@@ -102,6 +97,7 @@ export function OperationsPage({ view }: { view: OperationsView }) {
   );
   const [kind, setKind] = useState<Kind>(config.kinds[0]),
     [employee, setEmployee] = useState(""),
+    [review, setReview] = useState<HRRecord | null>(null),
     [detail, setDetail] = useState<HRRecord | null>(null),
     [link, setLink] = useState(""),
     [status, setStatus] = useState<{
@@ -156,6 +152,13 @@ export function OperationsPage({ view }: { view: OperationsView }) {
   }
   return (
     <>
+      {review ? (
+        <RequestReviewDialog
+          key={review.id}
+          record={review}
+          onClose={() => setReview(null)}
+        />
+      ) : null}
       {employmentChange ? (
         <EmploymentChange
           employeeId={employee}
@@ -188,6 +191,7 @@ export function OperationsPage({ view }: { view: OperationsView }) {
           ))}
         </div>
       )}
+      {kind === "holiday" && staff ? <HolidayImport /> : null}
       <div className="table-toolbar">
         <NativeSelect
           label="Filter employee"
@@ -455,36 +459,16 @@ export function OperationsPage({ view }: { view: OperationsView }) {
                 ) : null}
                 {requestKinds.includes(r.kind) &&
                 r.data.status === "Pending" &&
-                (staff || workspace.actor.role === "manager") ? (
-                  <>
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        void act(
-                          "review",
-                          { id: r.id, decision: "Approved" },
-                          "Request approved",
-                        )
-                      }
-                    >
-                      <Check size={14} />
-                      Approve
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        void act(
-                          "review",
-                          { id: r.id, decision: "Rejected" },
-                          "Request rejected",
-                        )
-                      }
-                    >
-                      <X size={14} />
-                      Reject
-                    </Button>
-                  </>
+                reviewOptions(workspace.actor, r, workspace.records).length ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setReview(r)}
+                  >
+                    {r.employee_id === workspace.actor.employeeId
+                      ? "Review / cancel"
+                      : "Review request"}
+                  </Button>
                 ) : null}
               </div>
             </article>
@@ -780,7 +764,7 @@ function RecordDetail({ record: r }: { record: HRRecord }) {
           <dt>Bank reference</dt>
           <dd>{String(r.data.bankReference || "—")}</dd>
         </dl>
-        {staff && r.data.status === "Prepared" ? (
+        {hasPayroll(workspace.actor, "pay") && r.data.status === "Prepared" ? (
           <>
             <Input
               aria-label="Bank transfer reference"
@@ -868,11 +852,14 @@ export function NotificationPanel() {
                 <button
                   className={`notification-item ${!n.read_at ? "unread" : ""}`}
                   key={n.id}
-                  onClick={() => {
+                  onClick={async () => {
+                    if (!n.read_at)
+                      await act("notification-read", { id: n.id });
                     setOpen(false);
-                    const page = n.href.split("view=")[1] as Parameters<
-                      typeof go
-                    >[0];
+                    const page = new URL(
+                      n.href,
+                      window.location.origin,
+                    ).searchParams.get("view") as Parameters<typeof go>[0];
                     if (page) go(page);
                   }}
                 >

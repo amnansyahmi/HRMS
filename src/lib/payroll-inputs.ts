@@ -11,11 +11,16 @@ export function payrollInputs(
     "Rest day": 2,
     "Public holiday": 3,
   },
+  window?: { startDate: string; endDate: string; cycle?: string },
 ) {
   const [year, month] = period.split("-").map(Number),
     daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate(),
-    start = period + "-01",
-    end = period + "-" + daysInMonth;
+    start = window?.startDate || period + "-01",
+    end = window?.endDate || period + "-" + daysInMonth;
+  const divisor = (date: string) =>
+    new Date(
+      Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)), 0),
+    ).getUTCDate();
   const first =
       String(employee.data.startDate) > start
         ? String(employee.data.startDate)
@@ -51,8 +56,10 @@ export function payrollInputs(
   let unroundedBase = 0;
   for (let day = Date.parse(first); day <= Date.parse(last); day += 86400000)
     unroundedBase +=
-      salaryAt(new Date(day).toISOString().slice(0, 10)) / daysInMonth;
-  const base = Math.round(unroundedBase * 100) / 100;
+      salaryAt(new Date(day).toISOString().slice(0, 10)) /
+      divisor(new Date(day).toISOString().slice(0, 10));
+  const base =
+    window?.cycle === "Off-cycle" ? 0 : Math.round(unroundedBase * 100) / 100;
   const own = records.filter((r) => r.employee_id === employee.id),
     inputs: HRRecord[] = [];
   let unpaidDays = 0,
@@ -78,12 +85,12 @@ export function payrollInputs(
             ? Number(leave.data.hours) / Number(employee.data.hoursPerDay || 8)
             : 1;
     const days = workingDays(from, to, workDays, holidays) * portion;
-    if (days) {
+    if (days && window?.cycle !== "Off-cycle") {
       unpaidDays += days;
       for (let day = Date.parse(from); day <= Date.parse(to); day += 86400000) {
         const date = new Date(day).toISOString().slice(0, 10);
         if (workingDays(date, date, workDays, holidays))
-          unpaidAmount += (salaryAt(date) / daysInMonth) * portion;
+          unpaidAmount += (salaryAt(date) / divisor(date)) * portion;
       }
       inputs.push(leave);
     }
@@ -141,7 +148,7 @@ export function payrollInputs(
       Math.round(claims.reduce((n, r) => n + Number(r.data.amount), 0) * 100) /
       100,
     inputRecordIds: inputs.map((r) => r.id),
-    note: `Calendar-day proration: ${payableDays}/${daysInMonth}. Unpaid working days: ${unpaidDays}. Unexcused lateness: ${lateMinutes} minutes (HR enters any verified pay adjustment). Overtime uses approved hours and configured type rates; HR must review eligibility and normal rest-day pay.`,
+    note: `${window ? `${window.cycle}: ${start} to ${end}. ` : ""}Calendar-day proration: ${payableDays} payable days using each date’s calendar-month divisor. Unpaid working days: ${unpaidDays}. Unexcused lateness: ${lateMinutes} minutes (HR enters any verified pay adjustment). Overtime uses approved hours and configured type rates; HR must review eligibility and normal rest-day pay.`,
     inputSummary: { payableDays, daysInMonth, unpaidDays },
   };
 }

@@ -1,10 +1,8 @@
-import { getActor, assertOrigin, audit } from "@/lib/auth";
+import { getActor, assertOrigin } from "@/lib/auth";
 import { workspace, recordPage } from "@/lib/hr";
-import { companySettings } from "@/lib/schema";
-import { handle, fail } from "@/lib/errors";
-import { transaction } from "@/lib/db";
+import { saveCompanyConfig } from "@/lib/company-config";
+import { handle } from "@/lib/errors";
 import { jsonBody } from "@/lib/request";
-import { z } from "zod";
 export const runtime = "nodejs";
 export async function GET(request: Request) {
   return handle(async () =>
@@ -24,25 +22,8 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   return handle(async () => {
     assertOrigin(request);
-    const actor = await getActor();
-    if (actor.role !== "owner")
-      fail("Only the owner can update workspace settings", 403);
-    const body = z
-      .object({
-        name: z.string().trim().min(2).max(100),
-        settings: companySettings,
-      })
-      .parse(await jsonBody(request));
-    await transaction(async (tx) => {
-      await tx.query("UPDATE companies SET name=$1,settings=$2 WHERE id=$3", [
-        body.name,
-        JSON.stringify(body.settings),
-        actor.companyId,
-      ]);
-      await audit(tx, actor, "Updated workspace settings", null, {
-        aiEnabled: body.settings.aiEnabled,
-      });
-    });
-    return Response.json({ ok: true });
+    return Response.json(
+      await saveCompanyConfig(await getActor(), await jsonBody(request)),
+    );
   });
 }

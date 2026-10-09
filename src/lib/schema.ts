@@ -1,5 +1,11 @@
 import { z } from "zod";
+import { skillsRubric } from "./resume-evidence";
 import { extendedSchemas, employeeFields } from "./extended-schema";
+import {
+  defaultEmployeeStatuses,
+  defaultSpecialists,
+  specialistNames,
+} from "./workflow-config";
 import type { Kind } from "./types";
 const text = z.string().trim().min(1).max(200);
 const long = z.string().trim().max(24000).default("");
@@ -26,18 +32,47 @@ const question = z
   );
 export const schemas = {
   ...extendedSchemas,
+  profile_change: z.object({
+    changes: z.record(z.string(), z.string()),
+    previous: z.record(z.string(), z.string()),
+    reason: z.string().trim().min(1).max(1000),
+    status: z.enum(["Pending", "Approved", "Rejected", "Cancelled"]),
+    submittedBy: z.uuid(),
+    reviewedBy: optionalId,
+    reviewNote: z.string().max(1000).default(""),
+    reviewedAt: z.iso.datetime().nullable().default(null),
+  }),
+  designation: z.object({ name: text, description: long }),
+  payroll_run: z.object({
+    title: text,
+    cycle: z.enum([
+      "Monthly",
+      "Weekly",
+      "Fortnightly",
+      "Off-cycle",
+      "Final settlement",
+    ]),
+    startDate: date,
+    endDate: date,
+    payDate: date,
+    status: z.enum(["Draft", "Published"]),
+    finalInMonth: z.boolean().default(false),
+    preparedBy: z.uuid(),
+    approvedBy: optionalId,
+    period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  }),
   employee: z.object({
     ...employeeFields,
     name: text,
     email: z.email().toLowerCase(),
     title: text,
+    designationId: optionalId,
+    employmentStatus: z.string().trim().max(100).default(""),
     departmentId: optionalId,
     managerId: optionalId,
     startDate: date,
     endDate: date.nullable().default(null),
-    employmentType: z
-      .enum(["Full-time", "Part-time", "Contract", "Intern"])
-      .default("Full-time"),
+    employmentType: text.default("Full-time"),
     status: z.enum(["Active", "Onboarding", "Archived"]).default("Active"),
     salary: money,
     annualLeave: z.coerce.number().int().min(0).max(365).default(14),
@@ -96,17 +131,56 @@ export const schemas = {
   claim: z.object({
     category: text,
     claimTypeId: optionalId,
+    tripReference: z.string().trim().max(100).default(""),
     mileageKm: z.coerce.number().min(0).max(10000).default(0),
     approvalStep: z.number().int().min(0).max(2).default(0),
     date,
     amount: money.refine((v) => v > 0, "Amount must be greater than zero"),
     description: text,
     receiptId: optionalId,
-    status: z.enum(["Pending", "Approved", "Rejected", "Cancelled", "Paid"]),
+    status: z.enum([
+      "Pending",
+      "Approved",
+      "Rejected",
+      "Returned",
+      "Cancelled",
+      "Paid",
+    ]),
+    history: z
+      .array(
+        z.object({
+          at: z.iso.datetime(),
+          by: z.string().max(200),
+          actorId: z.uuid(),
+          action: z.string().max(100),
+          note: z.string().max(1000),
+          snapshot: z.record(z.string(), z.unknown()).optional(),
+        }),
+      )
+      .max(200)
+      .default([]),
     reviewedBy: optionalId,
     reviewNote: z.string().max(1000).default(""),
   }),
   payroll: z.object({
+    runId: optionalId,
+    cycle: z
+      .enum([
+        "Monthly",
+        "Weekly",
+        "Fortnightly",
+        "Off-cycle",
+        "Final settlement",
+      ])
+      .default("Monthly"),
+    startDate: date.nullable().default(null),
+    endDate: date.nullable().default(null),
+    payDate: date.nullable().default(null),
+    finalInMonth: z.boolean().default(false),
+    preparedBy: optionalId,
+    statutoryMode: z
+      .enum(["Monthly", "Manual", "Reconciled"])
+      .default("Monthly"),
     taxableNormal: money.nullable().default(null),
     taxableAdditional: money.nullable().default(null),
     epfWages: money.nullable().default(null),
@@ -161,6 +235,7 @@ export const schemas = {
     feedback: long,
   }),
   job: z.object({
+    scoreCriteria: skillsRubric,
     screeningQuestions: z.array(text).max(10).default([]),
     templateName: z.string().max(100).default(""),
     title: text,
@@ -298,6 +373,52 @@ export const companySettings = z.object({
       "Public holiday": z.number().min(1).max(10),
     })
     .default({ Normal: 1.5, "Rest day": 2, "Public holiday": 3 }),
+  employeeStatuses: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(100),
+        access: z.enum(["Active", "Onboarding", "Archived"]),
+      }),
+    )
+    .min(3)
+    .max(30)
+    .refine(
+      (v) => new Set(v.map((s) => s.name.toLowerCase())).size === v.length,
+      "Status names must be unique",
+    )
+    .default(defaultEmployeeStatuses),
+  employeeTypes: z
+    .array(text)
+    .min(1)
+    .max(30)
+    .refine(
+      (v) => new Set(v.map((s) => s.toLowerCase())).size === v.length,
+      "Employee types must be unique",
+    )
+    .default(["Full-time", "Part-time", "Contract", "Intern"]),
+  clockReminderMinutes: z.number().int().min(0).max(120).default(15),
+  aiSpecialists: z
+    .record(
+      z.enum(specialistNames),
+      z.object({
+        enabled: z.boolean(),
+        tools: z
+          .array(
+            z.enum([
+              "read",
+              "review",
+              "create-leave",
+              "create-claim",
+              "candidate-stage",
+              "letter-draft",
+              "clock",
+              "configure",
+            ]),
+          )
+          .max(8),
+      }),
+    )
+    .default(defaultSpecialists),
   aiEnabled: z.boolean(),
   aiActionsEnabled: z.boolean().default(false),
   aiAgents: z
@@ -307,6 +428,7 @@ export const companySettings = z.object({
       resume: z.boolean(),
       meeting: z.boolean(),
       preferences: z.boolean(),
+      chro: z.boolean().default(false),
     })
     .default({
       hr: true,
@@ -314,6 +436,7 @@ export const companySettings = z.object({
       resume: true,
       meeting: true,
       preferences: true,
+      chro: false,
     }),
   careersIntro: z.string().max(3000),
   registrationNo: z.string().max(60),

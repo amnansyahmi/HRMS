@@ -1,4 +1,5 @@
 "use client";
+import { hasPayroll } from "@/lib/workflow-config";
 import { useCallback, useEffect, useState, useRef } from "react";
 import dynamic from "next/dynamic";
 import {
@@ -39,6 +40,16 @@ import { isStaff, type Workspace, type Kind, type HRRecord } from "@/lib/types";
 import type { AssistantIntent } from "./assistant-page";
 import { toast } from "sonner";
 import { NotificationPanel } from "./operations-page";
+import { requestKinds, reviewOptions } from "@/lib/request-workflow";
+const ApprovalsPage = dynamic(() =>
+  import("./approvals-page").then((m) => m.ApprovalsPage),
+);
+const MyProfilePage = dynamic(() =>
+  import("./my-profile-page").then((m) => m.MyProfilePage),
+);
+const CalendarPage = dynamic(() =>
+  import("./calendar-page").then((m) => m.CalendarPage),
+);
 const OperationsPage = dynamic(() =>
   import("./operations-page").then((m) => m.OperationsPage),
 );
@@ -86,6 +97,9 @@ const navigation = [
     title: "Workspace",
     items: [
       { page: "overview", label: "Overview", icon: LayoutDashboard },
+      { page: "approvals", label: "Approval inbox", icon: ClipboardCheck },
+      { page: "calendar", label: "Team calendar", icon: CalendarDays },
+      { page: "my-profile", label: "My profile", icon: Users },
       { page: "people", label: "People", icon: Users },
       { page: "employee-files", label: "Employee files", icon: FileText },
       { page: "attendance", label: "Attendance & shifts", icon: Clock3 },
@@ -116,6 +130,9 @@ const navigation = [
   },
 ] as const;
 const labels: Record<Page, string> = {
+  approvals: "Approval inbox",
+  calendar: "Team calendar",
+  "my-profile": "My profile",
   "employee-files": "Employee files",
   "work-requests": "Time requests",
   "hr-policies": "HR policies",
@@ -137,6 +154,7 @@ const labels: Record<Page, string> = {
   settings: "Settings",
 };
 const kindPage: Partial<Record<Kind, Page>> = {
+  profile_change: "my-profile",
   document: "employee-files",
   asset: "employee-files",
   lifecycle: "employee-files",
@@ -155,6 +173,8 @@ const kindPage: Partial<Record<Kind, Page>> = {
   review_cycle: "reviews",
   evaluation_template: "reviews",
   evaluation: "reviews",
+  designation: "people",
+  payroll_run: "payroll",
   payment_voucher: "payments",
   employee: "people",
   department: "people",
@@ -188,7 +208,12 @@ function Sidebar({
 }) {
   const staff = isStaff(workspace.actor),
     pending = workspace.records.filter(
-      (r) => r.kind === "leave" && r.data.status === "Pending",
+      (r) =>
+        [...requestKinds, "profile_change"].includes(r.kind) &&
+        r.data.status === "Pending" &&
+        reviewOptions(workspace.actor, r, workspace.records).some((o) =>
+          ["Approved", "Rejected", "Returned"].includes(o),
+        ),
     ).length;
   return (
     <div className="sidebar-inner">
@@ -240,8 +265,10 @@ function Sidebar({
       </Button>
       <nav aria-label="Workspace navigation">
         {navigation.map((group) => {
-          const items = group.items.filter(
-            (item) => staff || !["recruitment", "payments"].includes(item.page),
+          const items = group.items.filter((item) =>
+            item.page === "payments"
+              ? hasPayroll(workspace.actor)
+              : staff || item.page !== "recruitment",
           );
           if (!items.length) return null;
           return (
@@ -256,7 +283,7 @@ function Sidebar({
                 >
                   <item.icon size={17} />
                   {item.label}
-                  {item.page === "leave" && pending ? (
+                  {item.page === "approvals" && pending ? (
                     <small>{pending}</small>
                   ) : null}
                 </button>
@@ -318,7 +345,13 @@ function Sidebar({
     </div>
   );
 }
-export function WorkspaceApp({ demo }: { demo: boolean }) {
+export function WorkspaceApp({
+  demo,
+  setupIssue,
+}: {
+  demo: boolean;
+  setupIssue?: string | null;
+}) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null),
     [state, setState] = useState<"loading" | "auth" | "ready" | "error">(
       "loading",
@@ -386,6 +419,7 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
     return () => window.removeEventListener("keydown", handler);
   }, []);
   function go(p: Page) {
+    if (!(p in labels)) return;
     setPage(p);
     setMobileOpen(false);
     window.history.replaceState(
@@ -434,6 +468,7 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
     return (
       <AuthScreen
         demo={demo}
+        setupIssue={setupIssue}
         onSuccess={async () => {
           go("overview");
           await refresh();
@@ -457,7 +492,9 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
       </div>
     );
   const staff = isStaff(workspace.actor),
-    restricted = !staff && ["recruitment", "payments"].includes(page),
+    restricted =
+      (page === "recruitment" && !staff) ||
+      (page === "payments" && !hasPayroll(workspace.actor)),
     visiblePage = restricted ? "overview" : page;
   const results = search.trim()
     ? workspace.records
@@ -594,6 +631,12 @@ export function WorkspaceApp({ demo }: { demo: boolean }) {
               />
             ) : visiblePage === "overview" ? (
               <OverviewPage />
+            ) : visiblePage === "approvals" ? (
+              <ApprovalsPage />
+            ) : visiblePage === "calendar" ? (
+              <CalendarPage />
+            ) : visiblePage === "my-profile" ? (
+              <MyProfilePage />
             ) : visiblePage === "people" ? (
               <PeoplePage />
             ) : visiblePage === "attendance" ? (

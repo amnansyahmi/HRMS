@@ -1,6 +1,9 @@
 import type { Data } from "./types";
 /** RFC 4180 rows, including quoted commas/newlines and escaped quotes. */
-export function parseCSV(input: string): Data[] {
+export function parseCSV(
+  input: string,
+  requiredColumns = ["name", "email", "title", "startDate"],
+): Data[] {
   const text = input.replace(/^\uFEFF/, "");
   if (text.length > 120000) throw new Error("CSV must be smaller than 120 KB");
   const rows: string[][] = [];
@@ -29,15 +32,11 @@ export function parseCSV(input: string): Data[] {
   row.push(value);
   if (row.some((v) => v.trim())) rows.push(row);
   const headers = rows.shift()?.map((v) => v.trim());
-  if (
-    !headers ||
-    !["name", "email", "title", "startDate"].every((k) => headers.includes(k))
-  )
-    throw new Error("CSV needs name, email, title and startDate columns");
+  if (!headers || !requiredColumns.every((k) => headers.includes(k)))
+    throw new Error(`CSV needs ${requiredColumns.join(", ")} columns`);
   if (new Set(headers).size !== headers.length)
     throw new Error("CSV column names must be unique");
-  if (rows.length > 100)
-    throw new Error("Import up to 100 employees at a time");
+  if (rows.length > 100) throw new Error("Import up to 100 rows at a time");
   return rows.map((values, i) => {
     if (values.length !== headers.length)
       throw new Error(`Row ${i + 2} has the wrong number of columns`);

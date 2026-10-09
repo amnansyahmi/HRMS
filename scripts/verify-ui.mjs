@@ -28,6 +28,7 @@ const server = spawn(
       DEMO_MODE: "true",
       HRMS_DATA_DIR: directory,
       NEXT_TELEMETRY_DISABLED: "1",
+      UI_VERIFICATION: "true",
     },
     stdio: ["ignore", "pipe", "pipe"],
   },
@@ -69,6 +70,25 @@ try {
     }),
     page = await context.newPage();
   page.on("pageerror", (e) => errors.push(e.message));
+  await page.addInitScript(() => {
+    window.SpeechRecognition = class {
+      start() {
+        queueMicrotask(() => {
+          this.onresult?.({
+            resultIndex: 0,
+            results: [
+              { isFinal: true, 0: { transcript: "Who is on leave today?" } },
+            ],
+          });
+          this.onend?.();
+        });
+      }
+      stop() {
+        this.onend?.();
+      }
+      abort() {}
+    };
+  });
   page.on("response", async (response) => {
     if (response.url().includes("/api/auth/demo") && !response.ok())
       console.error(
@@ -239,13 +259,11 @@ try {
     const block = onboardingPage
       .locator(".checklist .row-between")
       .filter({ hasText: type });
-    await block
-      .locator('input[type="file"]')
-      .setInputFiles({
-        name: type + ".txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from("Fabricated " + type + " for browser verification"),
-      });
+    await block.locator('input[type="file"]').setInputFiles({
+      name: type + ".txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Fabricated " + type + " for browser verification"),
+    });
     await block.getByText(type + ".txt", { exact: true }).waitFor();
   }
   await onboardingPage
@@ -271,11 +289,205 @@ try {
     path: "docs/screenshots/employee-files-desktop.png",
     fullPage: true,
   });
+  console.log("Checking equipment, claim correction, and dated pay runs.");
+  await page.getByRole("button", { name: "Equipment", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Add equipment", exact: true })
+    .click();
+  await page
+    .getByLabel("Employee", { exact: true })
+    .selectOption({ label: "UI Test Person" });
+  await page.getByLabel("Equipment", { exact: true }).fill("Browser laptop");
+  await page.getByLabel("Serial number", { exact: false }).fill("BROWSER-001");
+  await page.getByLabel("Issued on", { exact: false }).fill("2026-10-08");
+  await page.getByRole("button", { name: "Add record", exact: true }).click();
+  const assetCard = page
+    .locator(".record-card")
+    .filter({ hasText: "Browser laptop" });
+  await assetCard.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Returned on", { exact: false }).fill("2026-10-09");
+  await page.getByLabel("Condition", { exact: true }).selectOption("Returned");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const equipmentWorkspace = await (
+    await page.request.get(`${base}/api/workspace`)
+  ).json();
+  assert.equal(
+    equipmentWorkspace.records.find(
+      (r) => r.kind === "asset" && r.data.serial === "BROWSER-001",
+    ).data.returnedDate,
+    "2026-10-09",
+  );
+  const aina = equipmentWorkspace.records.find(
+    (r) => r.kind === "employee" && r.data.name === "Aina Rahman",
+  );
+  const correctionResponse = await page.request.post(
+    `${base}/api/records/claim`,
+    {
+      headers: { Origin: base },
+      data: {
+        employeeId: aina.id,
+        data: {
+          category: "Travel",
+          date: "2026-10-08",
+          amount: 45,
+          description: "Correction browser check",
+        },
+      },
+    },
+  );
+  assert(correctionResponse.ok(), await correctionResponse.text());
+  const correctionClaim = await correctionResponse.json();
+  await nav("Claims");
+  await page.reload();
+  const correctionRow = page
+    .locator("tbody tr")
+    .filter({ hasText: "Correction browser check" });
+  await correctionRow
+    .getByRole("button", { name: "Return for correction", exact: true })
+    .click();
+  assert(
+    await page
+      .getByRole("button", { name: "Confirm", exact: true })
+      .isDisabled(),
+  );
+  await page.getByLabel("Review note").fill("Correct receipt amount");
+  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await nav("Payroll & payslips");
+  await page.getByLabel("Pay cycle", { exact: true }).selectOption("Weekly");
+  await page.getByLabel("Run Starts").fill("2027-01-01");
+  await page.getByLabel("Run Ends").fill("2027-01-07");
+  await page.getByLabel("Run Pay date").fill("2027-01-08");
+  await page
+    .getByLabel("Payroll scope")
+    .selectOption({ label: "UI Test Person" });
+  await page
+    .getByRole("button", { name: "Prepare payroll", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Review", exact: true }).waitFor();
+  assert.equal(await page.locator("tbody tr").count(), 1);
+  assert.equal(await page.getByLabel("Payroll period").inputValue(), "2027-01");
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await page
+    .getByRole("checkbox", {
+      name: "I have checked the earnings and all statutory deductions for this employee",
+    })
+    .check();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page
+    .getByRole("button", { name: "Publish payslips", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Publish 1 payslips", exact: true })
+    .click();
+  await page.getByRole("link", { name: "Payslip", exact: true }).waitFor();
+  await page.screenshot({
+    path: "docs/screenshots/weekly-payroll-desktop.png",
+    fullPage: true,
+  });
+  await page
+    .locator(".sidebar-bottom")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page
+    .getByRole("heading", { name: "HR specialist permissions" })
+    .waitFor();
+  assert.equal(
+    await page
+      .locator(".settings-panel")
+      .filter({ hasText: "HR specialist permissions" })
+      .locator(".record-card")
+      .count(),
+    7,
+  );
+  await page
+    .getByLabel("Minutes before shift for reminders (0 disables)")
+    .fill("20");
+  const statuses = page.getByLabel(
+    "Employment statuses — name | access behaviour",
+  );
+  await statuses.fill((await statuses.inputValue()) + "\nConsultant|Active");
+  const types = page.getByLabel("Employee types — one per line");
+  await types.fill((await types.inputValue()) + "\nRetainer");
+  await page
+    .getByRole("button", { name: "Save settings", exact: true })
+    .click();
+  assert.equal(
+    (await (await page.request.get(`${base}/api/workspace`)).json()).company
+      .settings.clockReminderMinutes,
+    20,
+  );
+  const settingsWorkspace = await (
+    await page.request.get(`${base}/api/workspace`)
+  ).json();
+  const ainaMember = settingsWorkspace.members.find(
+    (member) => member.employee_id === aina.id,
+  );
+  for (const permissions of [["read"], []]) {
+    const grant = await page.request.post(`${base}/api/auth/payroll-access`, {
+      headers: { Origin: base },
+      data: { userId: ainaMember.user_id, permissions },
+    });
+    assert(grant.ok(), await grant.text());
+  }
+  await nav("People");
+  await page.getByRole("tab", { name: "Designations", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Add designation", exact: true })
+    .click();
+  await page
+    .getByLabel("Designation name", { exact: false })
+    .fill("Browser specialist");
+  await page.getByRole("button", { name: "Add record", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page.getByRole("tab", { name: /^Employees/ }).click();
+  await page
+    .getByRole("button", { name: "Edit UI Test Person", exact: true })
+    .click();
+  await page
+    .getByLabel("Designation (optional)", { exact: true })
+    .selectOption({ label: "Browser specialist" });
+  await page
+    .getByLabel("Employment status", { exact: true })
+    .selectOption("Consultant");
+  await page
+    .getByLabel("Employment type", { exact: true })
+    .selectOption("Retainer");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const configuredPerson = (
+    await (await page.request.get(`${base}/api/workspace`)).json()
+  ).records.find(
+    (r) => r.kind === "employee" && r.data.name === "UI Test Person",
+  );
+  assert.equal(configuredPerson.data.title, "Browser specialist");
+  assert.equal(configuredPerson.data.employmentStatus, "Consultant");
+  assert.equal(configuredPerson.data.employmentType, "Retainer");
   await nav("HR policies");
   await page
     .getByRole("heading", { name: "HR policies", exact: true })
     .waitFor();
   await page.getByRole("button", { name: "Claim types", exact: true }).click();
+  await page.getByRole("button", { name: "Holidays", exact: true }).click();
+  await page
+    .getByLabel("Holiday state", { exact: true })
+    .selectOption("Sarawak");
+  await page.getByRole("button", { name: "Preview 2026 holidays" }).click();
+  const holidayDialog = page.getByRole("dialog");
+  await holidayDialog
+    .getByLabel("Holiday 1 title", { exact: true })
+    .fill("Reviewed UI holiday");
+  await holidayDialog
+    .getByLabel("Holiday 1 date", { exact: true })
+    .fill("2026-12-29");
+  await holidayDialog.getByRole("checkbox").check();
+  await holidayDialog
+    .getByRole("button", { name: /^Import \d+ holidays$/ })
+    .click();
+  await holidayDialog.waitFor({ state: "hidden" });
+  await page.getByText("Reviewed UI holiday", { exact: true }).waitFor();
   await nav("Review cycles");
   await page
     .getByRole("heading", { name: "Review cycles", exact: true })
@@ -296,11 +508,83 @@ try {
   await page
     .getByRole("heading", { name: "What can I help you with?" })
     .waitFor();
-  await page
-    .locator("[data-sonner-toast]")
-    .waitFor({ state: "hidden", timeout: 15000 });
+  await page.getByRole("button", { name: "Dictate message" }).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('textarea[aria-label="Message People AI"]')
+        ?.value === "Who is on leave today?",
+  );
+  assert.equal(
+    await page.locator(".user-message").count(),
+    0,
+    "Dictation must not send without review",
+  );
+  await page.getByLabel("Message People AI").fill("");
+  await page.waitForFunction(
+    () => !document.querySelector("[data-sonner-toast]"),
+    undefined,
+    { timeout: 20000 },
+  );
   await page.screenshot({
     path: "docs/screenshots/assistant-desktop.png",
+    fullPage: true,
+  });
+  console.log("Checking approval inbox and scoped desktop calendar.");
+  const inboxRequest = await page.request.post(`${base}/api/records/time_off`, {
+    headers: { Origin: base },
+    data: {
+      employeeId: aina.id,
+      data: {
+        date: "2027-02-02",
+        start: "10:00",
+        end: "11:00",
+        reason: "Inbox time request browser check",
+      },
+    },
+  });
+  assert(inboxRequest.ok(), await inboxRequest.text());
+  const inboxRecord = await inboxRequest.json();
+  await nav("Approval inbox");
+  await page.reload();
+  await page
+    .getByRole("heading", { name: "Approval inbox", exact: true })
+    .waitFor();
+  await page
+    .getByLabel("Search approval inbox…")
+    .fill("Inbox time request browser check");
+  await page
+    .locator(".approval-card")
+    .getByRole("button", { name: "Review request", exact: true })
+    .click();
+  await page.getByLabel("Decision", { exact: true }).selectOption("Approved");
+  await page
+    .getByRole("button", { name: "Confirm decision", exact: true })
+    .click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const inboxUpdated = (
+    await (await page.request.get(`${base}/api/workspace`)).json()
+  ).records.find((r) => r.id === inboxRecord.id);
+  assert.equal(inboxUpdated.data.status, "Approved");
+  await page.screenshot({
+    path: "docs/screenshots/approvals-desktop.png",
+    fullPage: true,
+  });
+  await nav("Team calendar");
+  await page.getByLabel("Calendar month").fill("2027-02");
+  await page.getByLabel("Calendar category").selectOption("time_off");
+  await page
+    .locator(".calendar-grid")
+    .getByText("Aina Rahman · Time off", { exact: true })
+    .waitFor();
+  const calendarResponse = await page.request.get(
+    `${base}/api/export?type=calendar&start=2027-02-01&end=2027-02-28&scope=team&category=time_off`,
+  );
+  assert(calendarResponse.ok(), await calendarResponse.text());
+  const calendarText = await calendarResponse.text();
+  assert(calendarText.includes("DTSTART:20270202T020000Z"));
+  assert(!calendarText.includes("Inbox time request browser check"));
+  await page.screenshot({
+    path: "docs/screenshots/calendar-desktop.png",
     fullPage: true,
   });
   console.log(
@@ -398,6 +682,25 @@ try {
     path: "docs/screenshots/assistant-mobile.png",
     fullPage: true,
   });
+  for (const view of ["settings", "payroll"]) {
+    await page.goto(`${base}/?view=${view}`);
+    await page
+      .getByRole("heading", {
+        name: view === "settings" ? "Workspace settings" : "Payroll & payslips",
+        exact: true,
+      })
+      .waitFor();
+    assert(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+      `Mobile ${view} overflows`,
+    );
+    await page.screenshot({
+      path: `docs/screenshots/${view}-mobile.png`,
+      fullPage: true,
+    });
+  }
   await page.request.post(`${base}/api/auth/demo`, {
     headers: { Origin: base },
     data: { role: "employee" },
@@ -419,6 +722,158 @@ try {
       )
       .every((r) => r.data.salary === undefined),
   );
+  await page.goto(`${base}/?view=claims`);
+  await page
+    .getByRole("button", { name: "Correct & resubmit", exact: true })
+    .click();
+  await page.getByLabel("Amount (RM)", { exact: false }).fill("35");
+  await page
+    .getByRole("button", { name: "Resubmit claim", exact: true })
+    .click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const corrected = (
+    await (await page.request.get(`${base}/api/workspace`)).json()
+  ).records.find((r) => r.id === correctionClaim.id);
+  assert.equal(corrected.data.status, "Pending");
+  assert.equal(corrected.data.amount, 35);
+  assert.deepEqual(
+    corrected.data.history.map((e) => e.action),
+    ["Submitted", "Returned", "Resubmitted"],
+  );
+  await page.screenshot({
+    path: "docs/screenshots/claims-mobile.png",
+    fullPage: true,
+  });
+  console.log("Checking mobile contact updates and HR approval.");
+  await page.goto(`${base}/?view=my-profile`);
+  await page
+    .getByRole("heading", { name: "My profile", exact: true })
+    .waitFor();
+  await page
+    .getByRole("button", { name: "Request an update", exact: true })
+    .click();
+  await page.getByLabel("Phone", { exact: true }).fill("0135550199");
+  await page
+    .getByLabel("Reason for update", { exact: true })
+    .fill("Updated contact browser check");
+  await page.getByRole("button", { name: "Send to HR", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page
+    .getByText("HR is reviewing your latest request.", { exact: true })
+    .waitFor();
+  const profileWorkspace = await (
+    await page.request.get(`${base}/api/workspace`)
+  ).json();
+  const profileRequest = profileWorkspace.records.find(
+    (r) =>
+      r.kind === "profile_change" &&
+      r.data.reason === "Updated contact browser check",
+  );
+  assert.equal(profileRequest.data.status, "Pending");
+  assert.notEqual(
+    profileWorkspace.records.find(
+      (r) => r.id === profileWorkspace.actor.employeeId,
+    ).data.phone,
+    "0135550199",
+  );
+  assert.equal((await page.request.get(`${base}/api/setup`)).status(), 403);
+  await page.screenshot({
+    path: "docs/screenshots/profile-mobile.png",
+    fullPage: true,
+  });
+  await page.goto(`${base}/?view=calendar`);
+  await page
+    .getByRole("heading", { name: "Team calendar", exact: true })
+    .waitFor();
+  await page.getByLabel("Calendar month").fill("2027-02");
+  await page.getByLabel("Calendar category").selectOption("time_off");
+  await page
+    .locator(".calendar-agenda")
+    .getByText("Aina Rahman · Time off", { exact: true })
+    .waitFor();
+  const privateCalendar = await page.request.get(
+    `${base}/api/export?type=calendar&start=2027-02-01&end=2027-02-28&scope=team`,
+  );
+  assert(privateCalendar.ok());
+  assert(!(await privateCalendar.text()).includes("UI Test Person"));
+  await page.screenshot({
+    path: "docs/screenshots/calendar-mobile.png",
+    fullPage: true,
+  });
+  await page.request.post(`${base}/api/auth/demo`, {
+    headers: { Origin: base },
+    data: { role: "owner" },
+  });
+  await page.goto(`${base}/?view=approvals`);
+  await page
+    .getByRole("heading", { name: "Approval inbox", exact: true })
+    .waitFor();
+  await page
+    .getByLabel("Search approval inbox…")
+    .fill("Updated contact browser check");
+  await page
+    .locator(".approval-card")
+    .getByRole("button", { name: "Review request", exact: true })
+    .click();
+  await page
+    .locator(".profile-diff")
+    .getByText("0135550199", { exact: false })
+    .waitFor();
+  await page
+    .getByRole("button", { name: "Confirm decision", exact: true })
+    .click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const approvedProfile = (
+    await (await page.request.get(`${base}/api/workspace`)).json()
+  ).records.find((r) => r.id === aina.id);
+  assert.equal(approvedProfile.data.phone, "0135550199");
+  await page.screenshot({
+    path: "docs/screenshots/approvals-mobile.png",
+    fullPage: true,
+  });
+  await page.goto(`${base}/?view=settings`);
+  await page
+    .getByRole("tab", { name: "Deployment setup", exact: true })
+    .click();
+  await page
+    .getByText("Database connection: responding.", { exact: false })
+    .waitFor();
+  await page.screenshot({
+    path: "docs/screenshots/setup-mobile.png",
+    fullPage: true,
+  });
+  for (const view of ["approvals", "calendar", "my-profile"]) {
+    await page.goto(`${base}/?view=${view}`);
+    await page
+      .getByRole("heading", {
+        name:
+          view === "approvals"
+            ? "Approval inbox"
+            : view === "calendar"
+              ? "Team calendar"
+              : "My profile",
+        exact: true,
+      })
+      .waitFor();
+    assert(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+      `Mobile ${view} overflows`,
+    );
+  }
+  await page.request.post(`${base}/api/auth/demo`, {
+    headers: { Origin: base },
+    data: { role: "employee" },
+  });
+  await page.goto(`${base}/?view=my-profile`);
+  await page
+    .getByRole("heading", { name: "My profile", exact: true })
+    .waitFor();
+  await page
+    .locator(".profile-panel")
+    .getByText("0135550199", { exact: true })
+    .waitFor();
   console.log("Checking the phone PWA and public-only offline cache.");
   await page.waitForFunction(
     () => navigator.serviceWorker.controller !== null,
@@ -478,6 +933,16 @@ try {
         publicApplications: true,
         assessmentSubmission: true,
         payrollPublication: true,
+        weeklyPayRun: true,
+        equipmentReturn: true,
+        returnedClaimResubmission: true,
+        specialistControls: true,
+        reviewedHolidayImport: true,
+        dictationRequiresReview: true,
+        approvalInbox: true,
+        scopedCalendarDownload: true,
+        profileChangeApproval: true,
+        ownerSetupChecks: true,
         employeeIsolation: true,
         onboardingReview: true,
         extendedScreens: true,

@@ -43,10 +43,20 @@ export function PeoplePage() {
           staff ? (
             <AddButton
               onClick={() =>
-                edit(tab === "employees" ? "employee" : "department")
+                edit(
+                  tab === "employees"
+                    ? "employee"
+                    : tab === "designations"
+                      ? "designation"
+                      : "department",
+                )
               }
             >
-              {tab === "employees" ? "Add employee" : "Add department"}
+              {tab === "employees"
+                ? "Add employee"
+                : tab === "designations"
+                  ? "Add designation"
+                  : "Add department"}
             </AddButton>
           ) : null
         }
@@ -57,6 +67,7 @@ export function PeoplePage() {
             Employees <span className="tab-count">{employees.length}</span>
           </TabsTrigger>
           <TabsTrigger value="departments">Departments</TabsTrigger>
+          <TabsTrigger value="designations">Designations</TabsTrigger>
         </TabsList>
         <TabsContent value="employees">
           <div className="table-toolbar">
@@ -103,7 +114,9 @@ export function PeoplePage() {
                       <td>{departmentName(e.data.departmentId)}</td>
                       <td>{String(e.data.employmentType)}</td>
                       <td>
-                        <Status value={e.data.status} />
+                        <Status
+                          value={e.data.employmentStatus || e.data.status}
+                        />
                       </td>
                       <td>
                         {staff ? (
@@ -177,6 +190,27 @@ export function PeoplePage() {
             />
           ) : null}
         </TabsContent>
+        <TabsContent value="designations">
+          <div className="record-cards">
+            {workspace.records
+              .filter((r) => r.kind === "designation")
+              .map((r) => (
+                <article className="record-card" key={r.id}>
+                  <h3>{String(r.data.name)}</h3>
+                  <p>{String(r.data.description || "")}</p>
+                  {staff ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => edit("designation", r)}
+                    >
+                      Edit designation
+                    </Button>
+                  ) : null}
+                </article>
+              ))}
+          </div>
+        </TabsContent>
       </Tabs>
       <Dialog
         open={!!selected}
@@ -209,7 +243,11 @@ export function PeoplePage() {
                 <dd>{String(selected.data.employmentType)}</dd>
                 <dt>Status</dt>
                 <dd>
-                  <Status value={selected.data.status} />
+                  <Status
+                    value={
+                      selected.data.employmentStatus || selected.data.status
+                    }
+                  />
                 </dd>
                 {selected.data.email ? (
                   <>

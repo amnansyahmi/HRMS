@@ -148,9 +148,9 @@ export const extendedFields: Partial<Record<Kind, Field[]>> = {
   ],
   asset: [
     text("name", "Equipment"),
-    text("serialNo", "Serial number"),
-    date("issuedOn", "Issued on"),
-    date("returnedOn", "Returned on"),
+    { ...text("serial", "Serial number"), required: true },
+    { ...date("issuedDate", "Issued on"), required: true },
+    date("returnedDate", "Returned on"),
     select("condition", "Condition", ["Good", "Needs repair", "Returned"]),
     area("notes", "Notes"),
   ],
@@ -245,7 +245,13 @@ export const extendedFields: Partial<Record<Kind, Field[]>> = {
   claim_type: [
     text("name", "Claim type"),
     num("limit", "Limit (RM)"),
-    select("period", "Limit resets", ["Annual", "Monthly", "Per request"]),
+    select("period", "Limit resets", [
+      "Annual",
+      "Monthly",
+      "Daily",
+      "Per trip",
+      "Per request",
+    ]),
     ref("departmentId", "Department (empty = everyone)", "department"),
     bool("receiptRequired", "Receipt required"),
     num("mileageRate", "Mileage rate per km (RM, 0 = amount entered)"),
@@ -292,6 +298,7 @@ export const requestFields = {
   claim: [
     ref("claimTypeId", "Custom claim policy (optional)", "claim_type"),
     num("mileageKm", "Mileage kilometres (optional)"),
+    text("tripReference", "Trip reference (required for per-trip policies)"),
   ],
   goal: [
     select("scope", "Goal scope", ["Individual", "Team", "Company"]),
@@ -307,6 +314,12 @@ export const requestFields = {
     num("weight", "Weight"),
   ],
   job: [
+    {
+      key: "scoreCriteria",
+      label: "AI skills rubric — skill or experience | weight, one per line",
+      type: "lines",
+      itemKeys: ["label", "weight"],
+    } as Field,
     {
       key: "screeningQuestions",
       label: "Screening questions — one per line",

@@ -14,7 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { api } from "@/lib/client";
+import { api, money } from "@/lib/client";
+import { sameClaimPeriod } from "@/lib/claim-period";
 import { toast } from "sonner";
 import { useWorkspace } from "./workspace-context";
 import { isStaff, type Data, type Kind, type HRRecord } from "@/lib/types";
@@ -30,6 +31,12 @@ const fields: Partial<Record<Kind, Field[]>> = {
     { key: "name", label: "Full name", required: true },
     { key: "email", label: "Work email", required: true },
     { key: "title", label: "Job title", required: true },
+    {
+      key: "designationId",
+      label: "Designation (optional)",
+      type: "select",
+      source: "designation",
+    },
     {
       key: "departmentId",
       label: "Department",
@@ -51,10 +58,17 @@ const fields: Partial<Record<Kind, Field[]>> = {
       options: employment,
     },
     {
-      key: "status",
-      label: "Status",
+      key: "employmentStatus",
+      label: "Employment status",
       type: "select",
-      options: ["Active", "Onboarding", "Archived"],
+      options: [
+        "Active",
+        "Onboarding",
+        "Probation",
+        "Confirmed",
+        "Resigned",
+        "Archived",
+      ],
     },
     { key: "salary", label: "Monthly base salary (RM)", type: "number" },
     {
@@ -70,6 +84,10 @@ const fields: Partial<Record<Kind, Field[]>> = {
       step: "1",
     },
     { key: "phone", label: "Phone" },
+  ],
+  designation: [
+    { key: "name", label: "Designation name", required: true },
+    { key: "description", label: "Description", type: "textarea" },
   ],
   department: [
     { key: "name", label: "Department name", required: true },
@@ -290,6 +308,11 @@ const fields: Partial<Record<Kind, Field[]>> = {
     })),
     { key: "note", label: "Payroll notes", type: "textarea" },
     {
+      key: "finalInMonth",
+      label: "This is the employee’s last payday of this month",
+      type: "boolean",
+    },
+    {
       key: "reviewed",
       label:
         "I have checked the earnings and all statutory deductions for this employee",
@@ -443,7 +466,22 @@ export function RecordForm({
 }) {
   const { workspace, refresh } = useWorkspace();
   const [data, setData] = useState<Data>(() =>
-    record ? { ...record.data } : defaults(kind),
+    record
+      ? {
+          ...record.data,
+          ...(kind === "employee"
+            ? {
+                employmentStatus:
+                  record.data.employmentStatus || record.data.status,
+              }
+            : {}),
+        }
+      : {
+          ...defaults(kind),
+          ...(kind === "employee"
+            ? { employmentType: workspace.company.settings.employeeTypes[0] }
+            : {}),
+        },
   );
   const [employeeId, setEmployeeId] = useState(
     record?.employee_id || workspace.actor.employeeId || "",
@@ -481,6 +519,10 @@ export function RecordForm({
   function change(key: string, value: unknown) {
     setData((d) => {
       const next = { ...d, [key]: value };
+      if (kind === "employee" && key === "designationId" && value)
+        next.title =
+          workspace.records.find((r) => r.id === value)?.data.name ||
+          next.title;
       if (kind === "claim") {
         const policy = workspace.records.find((r) => r.id === next.claimTypeId);
         if (policy && Number(policy.data.mileageRate) > 0)
@@ -520,15 +562,29 @@ export function RecordForm({
                 : []),
             ]);
           });
+      const resubmitting =
+        kind === "claim" && record?.data.status === "Returned";
       const result = await api<{ invitationUrl?: string }>(
-        record ? `/api/records/${kind}/${record.id}` : `/api/records/${kind}`,
-        record
-          ? { data: payload, updatedAt: record.updated_at }
-          : { data: payload, employeeId: employeeId || null },
-        record ? "PATCH" : "POST",
+        resubmitting
+          ? "/api/actions/claim-resubmit"
+          : record
+            ? `/api/records/${kind}/${record.id}`
+            : `/api/records/${kind}`,
+        resubmitting
+          ? { id: record!.id, data: payload, updatedAt: record!.updated_at }
+          : record
+            ? { data: payload, updatedAt: record.updated_at }
+            : { data: payload, employeeId: employeeId || null },
+        resubmitting ? "POST" : record ? "PATCH" : "POST",
       );
       await refresh();
-      toast.success(record ? "Changes saved" : "Record added");
+      toast.success(
+        resubmitting
+          ? "Claim resubmitted"
+          : record
+            ? "Changes saved"
+            : "Record added",
+      );
       if (result.invitationUrl)
         toast.info("Employee invitation prepared", {
           duration: 10000,
@@ -620,6 +676,25 @@ export function RecordForm({
     dueDate: string | null;
     done: boolean;
   }[];
+  const claimPolicy =
+    kind === "claim"
+      ? workspace.records.find(
+          (r) => r.kind === "claim_type" && r.id === data.claimTypeId,
+        )
+      : null;
+  const claimReserved = claimPolicy
+    ? workspace.records
+        .filter(
+          (r) =>
+            r.kind === "claim" &&
+            r.id !== record?.id &&
+            r.employee_id === employeeId &&
+            r.data.claimTypeId === claimPolicy.id &&
+            ["Pending", "Approved", "Paid"].includes(String(r.data.status)) &&
+            sameClaimPeriod(claimPolicy.data.period, r.data, data),
+        )
+        .reduce((sum, r) => sum + Number(r.data.amount), 0)
+    : 0;
   return (
     <Dialog
       open
@@ -641,6 +716,21 @@ export function RecordForm({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={save}>
+          {claimPolicy ? (
+            <div className="info-note mb-4">
+              <strong>
+                {String(claimPolicy.data.name)} ·{" "}
+                {String(claimPolicy.data.period)}
+              </strong>
+              <p>
+                {claimPolicy.data.period === "Per trip" &&
+                !String(data.tripReference || "").trim()
+                  ? "Enter a trip reference to check its remaining balance."
+                  : `${money(Math.max(0, Number(claimPolicy.data.limit) - claimReserved))} available; ${money(claimReserved)} reserved or paid in this period.`}{" "}
+                Balance is rechecked when you submit.
+              </p>
+            </div>
+          ) : null}
           <div className="record-form-grid">
             {[
               "leave",
@@ -705,7 +795,14 @@ export function RecordForm({
                             r.kind,
                         ),
                       }))
-                  : (f.options || []).map((v) => ({ value: v, label: v }));
+                  : (kind === "employee" && f.key === "employmentStatus"
+                      ? workspace.company.settings.employeeStatuses.map(
+                          (s) => s.name,
+                        )
+                      : kind === "employee" && f.key === "employmentType"
+                        ? workspace.company.settings.employeeTypes
+                        : f.options || []
+                    ).map((v) => ({ value: v, label: v }));
                 return (
                   <div
                     key={f.key}
@@ -1163,7 +1260,9 @@ export function RecordForm({
             <Button type="submit" disabled={busy || uploading}>
               {busy ? <Loader2 className="animate-spin" /> : null}
               {record
-                ? "Save changes"
+                ? kind === "claim" && record?.data.status === "Returned"
+                  ? "Resubmit claim"
+                  : "Save changes"
                 : kind === "leave" || kind === "claim"
                   ? "Submit request"
                   : "Add record"}

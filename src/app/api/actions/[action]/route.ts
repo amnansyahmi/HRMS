@@ -1,14 +1,20 @@
+import { resubmitClaim } from "@/lib/claims";
+import {
+  submitProfileChange,
+  reviewProfileChange,
+} from "@/lib/profile-changes";
 import { getActor, assertOrigin } from "@/lib/auth";
 import {
   clock,
   recalculatePayroll,
+  refreshPayroll,
   reviewRequest,
   generatePayroll,
   publishPayroll,
 } from "@/lib/hr";
 import { ocrReceipt } from "@/lib/ocr";
 import { transcribeMeeting } from "@/lib/media";
-import { confirmAIProposal } from "@/lib/ai-actions";
+import { confirmAIProposal, cancelAIProposal } from "@/lib/ai-actions";
 import { operation } from "@/lib/operations";
 import { inviteAssessment, createProfileTemplate } from "@/lib/recruitment";
 import { handle } from "@/lib/errors";
@@ -23,17 +29,27 @@ export async function POST(
     const actor = await getActor(),
       body = await jsonBody(request),
       { action } = await params;
+    if (action === "claim-resubmit")
+      return Response.json(await resubmitClaim(actor, body));
+    if (action === "profile-request")
+      return Response.json(await submitProfileChange(actor, body));
+    if (action === "profile-review")
+      return Response.json(await reviewProfileChange(actor, body));
     if (action === "receipt-ocr")
       return Response.json(await ocrReceipt(actor, body));
     if (action === "meeting-transcribe")
       return Response.json(await transcribeMeeting(actor, body));
     if (action === "ai-confirm")
       return Response.json(await confirmAIProposal(actor, body));
+    if (action === "ai-cancel")
+      return Response.json(await cancelAIProposal(actor, body));
     if (action === "clock") return Response.json(await clock(actor, body));
     if (action === "review")
       return Response.json(await reviewRequest(actor, body));
     if (action === "payroll-generate")
       return Response.json(await generatePayroll(actor, body));
+    if (action === "payroll-refresh")
+      return Response.json(await refreshPayroll(actor, body));
     if (action === "payroll-calculate")
       return Response.json(await recalculatePayroll(actor, body));
     if (action === "payroll-publish")

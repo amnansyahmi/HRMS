@@ -1,5 +1,8 @@
 "use client";
+import { PayrollAccessControl, SpecialistControls } from "./workflow-settings";
+import { PendingInvitations } from "./pending-invitations";
 import { SecuritySettings } from "./security-page";
+import { SetupStatus } from "./setup-status";
 import { useState } from "react";
 import {
   Save,
@@ -36,6 +39,14 @@ export function SettingsPage() {
     [holidays, setHolidays] = useState(
       workspace.company.settings.holidays.join("\n"),
     ),
+    [statusLines, setStatusLines] = useState(
+      workspace.company.settings.employeeStatuses
+        .map((s) => `${s.name} | ${s.access}`)
+        .join("\n"),
+    ),
+    [typeLines, setTypeLines] = useState(
+      workspace.company.settings.employeeTypes.join("\n"),
+    ),
     [busy, setBusy] = useState(false),
     [inviting, setInviting] = useState(false),
     [email, setEmail] = useState(""),
@@ -56,6 +67,17 @@ export function SettingsPage() {
           name,
           settings: {
             ...settings,
+            employeeStatuses: statusLines
+              .split("\n")
+              .filter((v) => v.trim())
+              .map((v) => {
+                const [name, access] = v.split("|").map((s) => s.trim());
+                return { name, access };
+              }),
+            employeeTypes: typeLines
+              .split("\n")
+              .map((v) => v.trim())
+              .filter(Boolean),
             holidays: holidays.split(/\s+/).filter(Boolean),
           },
         },
@@ -116,10 +138,59 @@ export function SettingsPage() {
         description="Your company, access and AI connection."
       />
       {owner ? (
+        <>
+          <SpecialistControls settings={settings} onChange={setSettings} />
+          <section className="settings-panel">
+            <h2>Employee configuration</h2>
+            <p>
+              Add labels such as Probation or Confirmed. Active keeps access;
+              Onboarding marks a joining employee; Archived ends access when
+              applied to an employee. Existing labels cannot be removed while in
+              use.
+            </p>
+            <Label htmlFor="employment-statuses">
+              Employment statuses — name | access behaviour
+            </Label>
+            <Textarea
+              id="employment-statuses"
+              value={statusLines}
+              onChange={(e) => setStatusLines(e.target.value)}
+              rows={7}
+            />
+            <Label htmlFor="employment-types">
+              Employee types — one per line
+            </Label>
+            <Textarea
+              id="employment-types"
+              value={typeLines}
+              onChange={(e) => setTypeLines(e.target.value)}
+              rows={4}
+            />
+            <Label htmlFor="clock-reminder-minutes">
+              Minutes before shift for reminders (0 disables)
+            </Label>
+            <Input
+              id="clock-reminder-minutes"
+              type="number"
+              min={0}
+              max={120}
+              value={settings.clockReminderMinutes}
+              onChange={(e) =>
+                setSettings((s) => ({
+                  ...s,
+                  clockReminderMinutes: Number(e.target.value),
+                }))
+              }
+            />
+            <p>Use Save settings in Company settings to save these options.</p>
+          </section>
+        </>
+      ) : null}
+      {owner ? (
         <section className="settings-panel">
           <h2>AI assistants</h2>
           <div className="checklist">
-            {["hr", "recruit", "resume", "meeting", "preferences"].map(
+            {["hr", "recruit", "resume", "meeting", "preferences", "chro"].map(
               (mode) => (
                 <label key={mode}>
                   <Checkbox
@@ -138,6 +209,7 @@ export function SettingsPage() {
                             resume: true,
                             meeting: true,
                             preferences: true,
+                            chro: false,
                           }),
                           [mode]: value === true,
                         },
@@ -147,13 +219,15 @@ export function SettingsPage() {
                   <span>
                     {mode === "hr"
                       ? "HR questions"
-                      : mode === "resume"
-                        ? "Resume review"
-                        : mode === "preferences"
-                          ? "Work preferences"
-                          : mode === "meeting"
-                            ? "Meeting summaries"
-                            : "Recruitment"}
+                      : mode === "chro"
+                        ? "Read-only CHRO brief (owner)"
+                        : mode === "resume"
+                          ? "Resume review"
+                          : mode === "preferences"
+                            ? "Work preferences"
+                            : mode === "meeting"
+                              ? "Meeting summaries"
+                              : "Recruitment"}
                   </span>
                 </label>
               ),
@@ -198,6 +272,9 @@ export function SettingsPage() {
           <TabsTrigger value="security">Account security</TabsTrigger>
           {owner ? <TabsTrigger value="access">Team access</TabsTrigger> : null}
           <TabsTrigger value="ai">AI connection</TabsTrigger>
+          {owner ? (
+            <TabsTrigger value="setup">Deployment setup</TabsTrigger>
+          ) : null}
           {owner ? <TabsTrigger value="activity">Activity</TabsTrigger> : null}
         </TabsList>
         <TabsContent value="security">
@@ -388,6 +465,7 @@ export function SettingsPage() {
                   <th>Member</th>
                   <th>Role</th>
                   <th>Employee link</th>
+                  <th>Payroll permissions</th>
                   <th />
                 </tr>
               </thead>
@@ -417,6 +495,9 @@ export function SettingsPage() {
                       />
                     </td>
                     <td>
+                      <PayrollAccessControl member={m} refresh={refresh} />
+                    </td>
+                    <td>
                       {m.user_id !== workspace.actor.userId &&
                       m.role !== "owner" ? (
                         <Button
@@ -435,15 +516,16 @@ export function SettingsPage() {
               </tbody>
             </table>
           </div>
+          <PendingInvitations revision={inviteLink} />
           <div className="role-guide">
             <h3>Access at a glance</h3>
             <p>
               <strong>Owner</strong> manages company settings and access.{" "}
-              <strong>HR</strong> manages employees, payroll and hiring.{" "}
-              <strong>Manager</strong> reviews their direct team’s requests and
-              goals, with access to their own payslips.{" "}
-              <strong>Employee</strong> uses self-service and the public team
-              directory.
+              <strong>HR</strong> manages employees and hiring. Payroll access
+              can be limited separately. <strong>Manager</strong> reviews their
+              direct team’s requests and goals, with access to their own
+              payslips. <strong>Employee</strong> uses self-service and the
+              public team directory.
             </p>
           </div>
         </TabsContent>
@@ -511,6 +593,11 @@ export function SettingsPage() {
             )}
           </section>
         </TabsContent>
+        {owner ? (
+          <TabsContent value="setup">
+            <SetupStatus />
+          </TabsContent>
+        ) : null}
         <TabsContent value="activity">
           <section className="settings-section">
             <h2>Recent activity</h2>

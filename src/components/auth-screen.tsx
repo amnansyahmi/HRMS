@@ -9,9 +9,11 @@ import { api } from "@/lib/client";
 import { toast } from "sonner";
 export function AuthScreen({
   demo,
+  setupIssue,
   onSuccess,
 }: {
   demo: boolean;
+  setupIssue?: string | null;
   onSuccess: () => Promise<void>;
 }) {
   const [signup, setSignup] = useState(false),
@@ -59,9 +61,22 @@ export function AuthScreen({
             ? "Create your company workspace. Bring the team together."
             : "Your people, everyday work and hiring. All in one place."}
         </p>
+        {setupIssue ? (
+          <div className="deployment-issue" role="alert">
+            <strong>This deployment needs setup</strong>
+            <p>
+              {setupIssue}. Ask the administrator to update the server
+              environment and redeploy.
+            </p>
+          </div>
+        ) : null}
         {!realLogin ? (
           <div className="demo-entry main-demo-entry">
-            <Button className="w-full" disabled={busy} onClick={enterDemo}>
+            <Button
+              className="w-full"
+              disabled={busy || !!setupIssue}
+              onClick={enterDemo}
+            >
               {busy ? <Loader2 className="animate-spin" /> : null}Log in
               <ArrowRight size={16} />
             </Button>
@@ -124,7 +139,11 @@ export function AuthScreen({
                   </Link>
                 </>
               ) : null}
-              <Button disabled={busy} type="submit" className="w-full">
+              <Button
+                disabled={busy || !!setupIssue}
+                type="submit"
+                className="w-full"
+              >
                 {busy ? <Loader2 className="animate-spin" /> : null}
                 {signup ? "Create workspace" : "Sign in"}
                 <ArrowRight size={16} />
@@ -146,7 +165,7 @@ export function AuthScreen({
             <Button
               variant="outline"
               className="w-full"
-              disabled={busy}
+              disabled={busy || !!setupIssue}
               onClick={enterDemo}
             >
               Log in to demo

@@ -1,14 +1,19 @@
+import { hasPayroll } from "@/lib/workflow-config";
 import { z } from "zod";
 import { getActor, getCompany, audit } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { csv } from "@/lib/calculations";
 import { handle, fail } from "@/lib/errors";
 import { isStaff, type HRRecord } from "@/lib/types";
+import { visibleRecords } from "@/lib/hr";
+import { date } from "@/lib/schema";
+import { calendarEvents } from "@/lib/hr-calendar";
+import { exportCalendar } from "@/lib/calendar-export";
 export const runtime = "nodejs";
 export async function GET(request: Request) {
   return handle(async () => {
     const actor = await getActor();
-    if (!isStaff(actor)) fail("Only HR can export company records", 403);
+
     const url = new URL(request.url),
       type = z
         .enum([
@@ -19,8 +24,50 @@ export async function GET(request: Request) {
           "CP22A",
           "voucher",
           "claims",
+          "calendar",
         ])
         .parse(url.searchParams.get("type"));
+    if (type === "calendar") {
+      const start = date.parse(url.searchParams.get("start")),
+        end = date.parse(url.searchParams.get("end"));
+      const scope = z
+        .enum(["mine", "team"])
+        .parse(url.searchParams.get("scope") || "mine");
+      const category = z
+        .enum(["All", "leave", "time_off", "shift", "holiday"])
+        .parse(url.searchParams.get("category") || "All");
+      if (end < start || Date.parse(end) - Date.parse(start) > 61 * 86400000)
+        fail("Choose a calendar range of 1–62 days");
+      const company = await getCompany(actor),
+        records = await visibleRecords(actor);
+      const events = calendarEvents(
+        actor,
+        company,
+        records,
+        start,
+        end,
+        scope,
+      ).filter((e) => category === "All" || e.kind === category);
+      await audit(db, actor, "Exported scoped calendar", null, {
+        start,
+        end,
+        scope,
+        category,
+      });
+      return new Response(exportCalendar(events, company.settings.timezone), {
+        headers: {
+          "Content-Type": "text/calendar; charset=utf-8",
+          "Content-Disposition": `attachment; filename="people-calendar-${start}.ics"`,
+          "Cache-Control": "private, no-store",
+        },
+      });
+    }
+    if (
+      ["payroll", "EA", "CP22", "CP22A", "voucher"].includes(type)
+        ? !hasPayroll(actor)
+        : !isStaff(actor)
+    )
+      fail("You do not have permission to export these records", 403);
     const company = await getCompany(actor),
       year = z.coerce
         .number()
@@ -137,16 +184,25 @@ export async function GET(request: Request) {
         .string()
         .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
         .parse(url.searchParams.get("period"));
-      filename += `-${period}`;
+      const runId = url.searchParams.get("runId")
+        ? z.uuid().parse(url.searchParams.get("runId"))
+        : null;
+      const legacy = url.searchParams.get("legacy") === "true";
+      filename += `-${period}${runId ? "-" + runId : ""}`;
       const payslips = (
         await db.query<HRRecord>(
-          "SELECT * FROM hr_records WHERE company_id=$1 AND kind='payroll' AND data->>'period'=$2 ORDER BY data->>'employeeName'",
-          [actor.companyId, period],
+          "SELECT * FROM hr_records WHERE company_id=$1 AND kind='payroll' AND data->>'period'=$2 AND ($3::text IS NULL OR data->>'runId'=$3) AND (NOT $4::boolean OR data->>'runId' IS NULL) ORDER BY data->>'employeeName'",
+          [actor.companyId, period, runId, legacy],
         )
       ).rows;
       const keys = [
         "employeeName",
         "period",
+        "runId",
+        "cycle",
+        "startDate",
+        "endDate",
+        "payDate",
         "base",
         "allowance",
         "overtime",
@@ -196,18 +252,22 @@ export async function GET(request: Request) {
           "allowance",
           "overtime",
           "bonus",
+          "commission",
           "gross",
           "epfEmployee",
           "socsoEmployee",
           "eisEmployee",
           "pcb",
           "otherDeduction",
+          "zakat",
+          "reimbursements",
           "net",
         ];
         rows.push([
           "Employee",
           "Email",
           "Published months",
+          "Published runs",
           ...keys.map((k) => `${k} (MYR)`),
         ]);
         for (const e of employees) {
@@ -216,12 +276,13 @@ export async function GET(request: Request) {
           rows.push([
             String(e.data.name),
             String(e.data.email),
+            new Set(items.map((p) => String(p.data.period))).size,
             items.length,
             ...keys.map(
               (k) =>
                 Math.round(
                   items.reduce(
-                    (n, p) => n + Math.round(Number(p.data[k]) * 100),
+                    (n, p) => n + Math.round(Number(p.data[k] || 0) * 100),
                     0,
                   ),
                 ) / 100,

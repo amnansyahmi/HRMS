@@ -1,3 +1,4 @@
+import { setPayrollAccess } from "@/lib/company-config";
 import {
   requestAccountToken,
   consumeAccountToken,
@@ -58,6 +59,8 @@ export async function POST(
       return Response.json(await enableMFA(await getActor(), body));
     if (action === "mfa-disable")
       return Response.json(await disableMFA(await getActor(), body));
+    if (action === "payroll-access")
+      return Response.json(await setPayrollAccess(await getActor(), body));
     if (action === "signup") await signup(body);
     else if (action === "login") await login(body);
     else if (action === "accept") await acceptInvite(body);

@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS companies (id uuid PRIMARY KEY, name text NOT NULL, s
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS hr_records (id uuid PRIMARY KEY, company_id uuid NOT NULL REFERENCES companies(id), kind text NOT NULL, employee_id uuid, data jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE(company_id, id), FOREIGN KEY(company_id, employee_id) REFERENCES hr_records(company_id, id));
 CREATE TABLE IF NOT EXISTS memberships (user_id uuid NOT NULL REFERENCES users(id), company_id uuid NOT NULL REFERENCES companies(id), role text NOT NULL CHECK(role IN ('owner','hr','manager','employee')), employee_id uuid, PRIMARY KEY(user_id, company_id), UNIQUE(company_id, employee_id), FOREIGN KEY(company_id, employee_id) REFERENCES hr_records(company_id, id));
+ALTER TABLE memberships ADD COLUMN IF NOT EXISTS payroll_access jsonb;
 CREATE TABLE IF NOT EXISTS sessions (token_hash text PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id), company_id uuid NOT NULL REFERENCES companies(id), expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS invites (id uuid PRIMARY KEY, company_id uuid NOT NULL REFERENCES companies(id), email text NOT NULL, role text NOT NULL CHECK(role IN ('hr','manager','employee')), employee_id uuid, token_hash text NOT NULL UNIQUE, expires_at timestamptz NOT NULL, accepted_at timestamptz, FOREIGN KEY(company_id, employee_id) REFERENCES hr_records(company_id, id));
 CREATE TABLE IF NOT EXISTS audit_log (id uuid PRIMARY KEY, company_id uuid NOT NULL REFERENCES companies(id), user_id uuid REFERENCES users(id), action text NOT NULL, entity_id uuid, details jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now());
@@ -32,7 +33,8 @@ CREATE INDEX IF NOT EXISTS audit_company ON audit_log(company_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS employee_email ON hr_records(company_id, (data->>'email')) WHERE kind='employee';
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_attendance ON hr_records(company_id, employee_id) WHERE kind='attendance' AND data->>'clockOut' IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS attendance_day ON hr_records(company_id, employee_id, (data->>'workDate')) WHERE kind='attendance';
-CREATE UNIQUE INDEX IF NOT EXISTS payroll_period ON hr_records(company_id, employee_id, (data->>'period')) WHERE kind='payroll';
+DROP INDEX IF EXISTS payroll_period;
+CREATE UNIQUE INDEX IF NOT EXISTS payroll_run_employee ON hr_records(company_id,employee_id,(coalesce(data->>'runId',data->>'period'))) WHERE kind='payroll';
 CREATE UNIQUE INDEX IF NOT EXISTS candidate_job_email ON hr_records(company_id, (data->>'jobId'), (data->>'email')) WHERE kind='candidate';
 
 CREATE INDEX IF NOT EXISTS hr_records_page_idx ON hr_records(company_id,created_at DESC,id);

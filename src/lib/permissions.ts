@@ -1,3 +1,4 @@
+import { hasPayroll } from "./workflow-config";
 import { employeeKinds, requestKinds } from "./policies";
 import type { Actor, HRRecord, Kind } from "./types";
 import { isStaff } from "./types";
@@ -17,6 +18,8 @@ export function canRead(
   departmentId?: unknown,
 ) {
   if (record.company_id !== actor.companyId) return false;
+  if (record.kind === "profile_change")
+    return isStaff(actor) || record.employee_id === actor.employeeId;
   if (record.kind === "meeting")
     return (
       actor.role === "owner" ||
@@ -25,11 +28,19 @@ export function canRead(
         actor.employeeId || "",
       )
     );
+  if (["payroll", "payroll_run", "payment_voucher"].includes(record.kind))
+    return (
+      hasPayroll(actor) ||
+      (record.kind === "payroll" &&
+        record.employee_id === actor.employeeId &&
+        record.data.status === "Published")
+    );
   if (isStaff(actor)) return true;
   if (
     [
       "employee",
       "department",
+      "designation",
       "policy",
       "location",
       "holiday",
@@ -71,11 +82,6 @@ export function canRead(
     )
   )
     return false;
-  if (record.kind === "payroll")
-    return (
-      record.employee_id === actor.employeeId &&
-      record.data.status === "Published"
-    );
   if ([...employeeKinds, "attendance"].includes(record.kind))
     return !!record.employee_id && team.includes(record.employee_id);
   return false;
@@ -84,18 +90,67 @@ export function redact(actor: Actor, record: HRRecord): HRRecord {
   if (
     record.kind === "employee" &&
     !isStaff(actor) &&
+    hasPayroll(actor) &&
     record.id !== actor.employeeId
-  ) {
-    const { name, title, departmentId, managerId, status, employmentType } =
-      record.data;
+  )
     return {
       ...record,
-      data: { name, title, departmentId, managerId, status, employmentType },
+      data: Object.fromEntries(
+        [
+          "name",
+          "title",
+          "designationId",
+          "employmentStatus",
+          "departmentId",
+          "managerId",
+          "status",
+          "employmentType",
+          "startDate",
+          "endDate",
+          "salary",
+          "bankName",
+          "bankAccount",
+          "nric",
+          "taxProfileVerified",
+        ]
+          .filter((k) => k in record.data)
+          .map((k) => [k, record.data[k]]),
+      ),
+    };
+  if (
+    record.kind === "employee" &&
+    !isStaff(actor) &&
+    !hasPayroll(actor) &&
+    record.id !== actor.employeeId
+  ) {
+    const {
+      name,
+      title,
+      designationId,
+      employmentStatus,
+      departmentId,
+      managerId,
+      status,
+      employmentType,
+    } = record.data;
+    return {
+      ...record,
+      data: {
+        name,
+        title,
+        designationId,
+        employmentStatus,
+        departmentId,
+        managerId,
+        status,
+        employmentType,
+      },
     };
   }
   if (
     record.kind === "job_history" &&
     !isStaff(actor) &&
+    !hasPayroll(actor) &&
     record.employee_id !== actor.employeeId
   ) {
     const data = { ...record.data };
@@ -115,9 +170,11 @@ export function canCreate(actor: Actor, kind: Kind, employeeId: string | null) {
     [
       "attendance",
       "payroll",
+      "payroll_run",
       "assessment_result",
       "job_history",
       "payment_voucher",
+      "profile_change",
     ].includes(kind)
   )
     return false;

@@ -1,0 +1,666 @@
+{
+  "year": 2026,
+  "reviewedAt": "2026-10-09",
+  "source": "https://www.kabinet.gov.my/storage/2025/08/HKA-2026.pdf",
+  "sha256": "415023261014e30880b0fbb7a40c47a9655605183ef976204489d760fed769a3",
+  "notes": "Published schedule snapshot. HR must review later gazettes, replacement days and company rest-day rules before importing. Dates marked subject to change are from the source. Supplementary gazettes are not automatically applied.",
+  "states": [
+    "Kuala Lumpur",
+    "Labuan",
+    "Putrajaya",
+    "Johor",
+    "Kedah",
+    "Kelantan",
+    "Melaka",
+    "Negeri Sembilan",
+    "Pahang",
+    "Perak",
+    "Perlis",
+    "Pulau Pinang",
+    "Sabah",
+    "Sarawak",
+    "Selangor",
+    "Terengganu"
+  ],
+  "holidays": [
+    {
+      "title": "Tahun Baharu 2026",
+      "date": "2026-01-01",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Keputeraan Yang di-Pertuan Besar Negeri Sembilan",
+      "date": "2026-01-14",
+      "states": [
+        "Negeri Sembilan"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Israk dan Mikraj",
+      "date": "2026-01-17",
+      "states": [
+        "Kedah",
+        "Negeri Sembilan",
+        "Perlis",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Thaipusam",
+      "date": "2026-02-01",
+      "states": [
+        "Kuala Lumpur",
+        "Putrajaya",
+        "Johor",
+        "Negeri Sembilan",
+        "Perak",
+        "Pulau Pinang",
+        "Selangor"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Wilayah Persekutuan",
+      "date": "2026-02-01",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Tahun Baharu Cina",
+      "date": "2026-02-17",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Tahun Baharu Cina (Hari Kedua)",
+      "date": "2026-02-18",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Awal Ramadan",
+      "date": "2026-02-19",
+      "states": [
+        "Johor",
+        "Kedah"
+      ],
+      "subjectToChange": true
+    },
+    {
+      "title": "Hari Pengisytiharan Tarikh Kemerdekaan",
+      "date": "2026-02-20",
+      "states": [
+        "Melaka"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Ulang Tahun Pertabalan Sultan Terengganu",
+      "date": "2026-03-04",
+      "states": [
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Nuzul Al-Quran",
+      "date": "2026-03-07",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Kelantan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Raya Puasa",
+      "date": "2026-03-21",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": true
+    },
+    {
+      "title": "Hari Raya Puasa (Hari Kedua)",
+      "date": "2026-03-22",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": true
+    },
+    {
+      "title": "Hari Keputeraan Sultan Johor",
+      "date": "2026-03-23",
+      "states": [
+        "Johor"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Raya Puasa (Hari Ketiga)",
+      "date": "2026-03-23",
+      "states": [
+        "Melaka"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Jadi Yang di-Pertua Negeri Sabah",
+      "date": "2026-03-30",
+      "states": [
+        "Sabah"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Good Friday",
+      "date": "2026-04-03",
+      "states": [
+        "Sabah",
+        "Sarawak"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Keputeraan Sultan Terengganu",
+      "date": "2026-04-26",
+      "states": [
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Pekerja",
+      "date": "2026-05-01",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Ulang Tahun Keputeraan Raja Perlis",
+      "date": "2026-05-17",
+      "states": [
+        "Perlis"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Hol Almarhum Sultan Ahmad Shah Al-Musta'in Billah ibni Almarhum Sultan Abu Bakar",
+      "date": "2026-05-22",
+      "states": [
+        "Pahang"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Arafah",
+      "date": "2026-05-26",
+      "states": [
+        "Kelantan",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Raya Qurban",
+      "date": "2026-05-27",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": true
+    },
+    {
+      "title": "Hari Raya Qurban (Hari Kedua)",
+      "date": "2026-05-28",
+      "states": [
+        "Kedah",
+        "Kelantan",
+        "Perlis",
+        "Terengganu"
+      ],
+      "subjectToChange": true
+    },
+    {
+      "title": "Pesta Kaamatan (Pesta Menuai)",
+      "date": "2026-05-30",
+      "states": [
+        "Labuan",
+        "Sabah"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Wesak",
+      "date": "2026-05-31",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Pesta Kaamatan (Pesta Menuai)",
+      "date": "2026-05-31",
+      "states": [
+        "Labuan",
+        "Sabah"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Keputeraan Rasmi Seri Paduka Baginda Yang di-Pertuan Agong",
+      "date": "2026-06-01",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Perayaan Hari Gawai Dayak",
+      "date": "2026-06-01",
+      "states": [
+        "Sarawak"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Perayaan Hari Gawai Dayak",
+      "date": "2026-06-02",
+      "states": [
+        "Sarawak"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Awal Muharam (Maal Hijrah)",
+      "date": "2026-06-17",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Keputeraan Sultan Kedah",
+      "date": "2026-06-21",
+      "states": [
+        "Kedah"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Ulang Tahun Perisytiharan Tapak Warisan Dunia",
+      "date": "2026-07-07",
+      "states": [
+        "Pulau Pinang"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Jadi Yang di-Pertua Negeri Pulau Pinang",
+      "date": "2026-07-11",
+      "states": [
+        "Pulau Pinang"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Hol Almarhum Sultan Iskandar",
+      "date": "2026-07-21",
+      "states": [
+        "Johor"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Kemerdekaan Sarawak",
+      "date": "2026-07-22",
+      "states": [
+        "Sarawak"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Keputeraan Sultan Pahang",
+      "date": "2026-07-31",
+      "states": [
+        "Pahang"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Jadi Yang di-Pertua Negeri Melaka",
+      "date": "2026-08-24",
+      "states": [
+        "Melaka"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Keputeraan Nabi Muhammad S.A.W. (Maulidur Rasul)",
+      "date": "2026-08-25",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Kebangsaan",
+      "date": "2026-08-31",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Malaysia",
+      "date": "2026-09-16",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Keputeraan Sultan Kelantan",
+      "date": "2026-09-29",
+      "states": [
+        "Kelantan"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Keputeraan Sultan Kelantan",
+      "date": "2026-09-30",
+      "states": [
+        "Kelantan"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Jadi Yang di-Pertua Negeri Sarawak",
+      "date": "2026-10-10",
+      "states": [
+        "Sarawak"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Keputeraan Sultan Perak",
+      "date": "2026-11-06",
+      "states": [
+        "Perak"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Deepavali",
+      "date": "2026-11-08",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": true
+    },
+    {
+      "title": "Hari Keputeraan Sultan Selangor",
+      "date": "2026-12-11",
+      "states": [
+        "Selangor"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Christmas Eve",
+      "date": "2026-12-24",
+      "states": [
+        "Sabah"
+      ],
+      "subjectToChange": false
+    },
+    {
+      "title": "Hari Krismas",
+      "date": "2026-12-25",
+      "states": [
+        "Kuala Lumpur",
+        "Labuan",
+        "Putrajaya",
+        "Johor",
+        "Kedah",
+        "Kelantan",
+        "Melaka",
+        "Negeri Sembilan",
+        "Pahang",
+        "Perak",
+        "Perlis",
+        "Pulau Pinang",
+        "Sabah",
+        "Sarawak",
+        "Selangor",
+        "Terengganu"
+      ],
+      "subjectToChange": false
+    }
+  ]
+}

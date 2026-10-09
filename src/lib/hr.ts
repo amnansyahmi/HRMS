@@ -1,3 +1,11 @@
+import {
+  payRunInput,
+  payRunDates,
+  overlapsPay,
+  reconcileRun,
+} from "./pay-runs";
+import { employmentData } from "./company-config";
+import { hasPayroll } from "./workflow-config";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db, transaction, type DB } from "./db";
@@ -112,7 +120,7 @@ export async function workspace(actor: Actor): Promise<Workspace> {
     actor.role === "owner"
       ? (
           await db.query<Workspace["members"][number]>(
-            "SELECT u.id AS user_id,u.name,u.email,m.role,m.employee_id FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 ORDER BY u.name",
+            "SELECT u.id AS user_id,u.name,u.email,m.role,m.employee_id,m.payroll_access FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 ORDER BY u.name",
             [actor.companyId],
           )
         ).rows
@@ -178,6 +186,8 @@ export async function insertRecord(
   data: Data,
   employeeId: string | null = null,
 ) {
+  if (kind === "employee")
+    data = await employmentData(tx, actor, schemas.employee.parse(data));
   const id = randomUUID();
   const result = (
     await tx.query<HRRecord>(
@@ -217,7 +227,7 @@ export async function insertRecord(
   }
   return normalize({ ...result, ...(invitationUrl ? { invitationUrl } : {}) });
 }
-async function validateReferences(
+export async function validateReferences(
   tx: DB,
   actor: Actor,
   kind: Kind,
@@ -227,7 +237,11 @@ async function validateReferences(
 ) {
   if (employeeId) {
     const employee = await recordById(actor, employeeId, "employee", tx);
-    if (employee.data.status === "Archived")
+    if (
+      employee.data.status === "Archived" &&
+      kind !== "payroll" &&
+      !(kind === "asset" && currentId && data.returnedDate)
+    )
       fail("Archived employees cannot receive new records");
   }
   if (data.locationId)
@@ -346,6 +360,8 @@ export async function createRecord(actor: Actor, kind: Kind, input: unknown) {
         fail("Choose a member of your team", 403);
     }
     let data = { ...body.data };
+    if (kind === "employee")
+      data = await employmentData(tx, actor, schemas.employee.parse(data));
     if (kind === "meeting")
       data = {
         ...data,
@@ -380,6 +396,16 @@ export async function createRecord(actor: Actor, kind: Kind, input: unknown) {
       data = schemas.leave.parse(data);
       data.days = await checkLeave(tx, actor, employeeId!, data);
     }
+    if (kind === "claim")
+      data.history = [
+        {
+          at: new Date().toISOString(),
+          by: actor.name,
+          actorId: actor.userId,
+          action: "Submitted",
+          note: "",
+        },
+      ];
     if (requestKinds.includes(kind))
       data = {
         ...data,
@@ -473,7 +499,7 @@ export async function createRecord(actor: Actor, kind: Kind, input: unknown) {
         actor,
         `New ${kind.replaceAll("_", " ")} request`,
         `${actor.name} submitted a request.`,
-        `/?view=${kind === "leave" ? "leave" : kind === "claim" ? "claims" : "time"}`,
+        "/?view=approvals",
         employeeId!,
         true,
       );
@@ -506,6 +532,15 @@ export async function updateRecord(
     )
       fail("Only the recorder or owner can edit this meeting", 403);
     let data = { ...current.data, ...body.data };
+    if (kind === "employee") {
+      if (
+        body.data.status &&
+        !body.data.employmentStatus &&
+        body.data.status !== current.data.status
+      )
+        data.employmentStatus = body.data.status;
+      data = await employmentData(tx, actor, data, current.data);
+    }
     if (kind === "meeting")
       data = {
         ...data,
@@ -534,11 +569,15 @@ export async function updateRecord(
         "assessment_result",
         "job_history",
         "payment_voucher",
+        "payroll_run",
+        "profile_change",
         ...requestKinds,
       ].includes(kind)
     )
       fail("Use the workflow action to change this record", 403);
-    if (!isStaff(actor)) {
+    if (kind === "payroll" && !hasPayroll(actor, "prepare"))
+      fail("Payroll preparation permission required", 403);
+    if (!isStaff(actor) && kind !== "payroll") {
       const team = teamIds(
         actor,
         (await allRecords(actor, tx)).filter((r) => r.kind === "employee"),
@@ -589,6 +628,13 @@ export async function updateRecord(
         employeeName: current.data.employeeName,
         employeeTitle: current.data.employeeTitle,
         period: current.data.period,
+        runId: current.data.runId,
+        cycle: current.data.cycle,
+        startDate: current.data.startDate,
+        endDate: current.data.endDate,
+        payDate: current.data.payDate,
+        preparedBy: current.data.preparedBy,
+        statutoryMode: current.data.statutoryMode,
       };
       try {
         data = { ...data, ...payrollTotals(data) };
@@ -684,7 +730,13 @@ export async function reviewRequest(actor: Actor, input: unknown) {
   const body = z
     .object({
       id: z.uuid(),
-      decision: z.enum(["Approved", "Rejected", "Cancelled", "Paid"]),
+      decision: z.enum([
+        "Approved",
+        "Rejected",
+        "Returned",
+        "Cancelled",
+        "Paid",
+      ]),
       note: z.string().max(1000).default(""),
       expectedUpdatedAt: z.string().optional(),
     })
@@ -698,6 +750,11 @@ export async function reviewRequest(actor: Actor, input: unknown) {
       fail("The request changed. Refresh before confirming.", 409);
     if (!requestKinds.includes(current.kind))
       fail("This record has no approval workflow");
+    if (
+      body.decision === "Returned" &&
+      (current.kind !== "claim" || !body.note.trim())
+    )
+      fail("Returning a claim requires a correction reason");
     const employee = await recordById(
       actor,
       current.employee_id!,
@@ -705,6 +762,11 @@ export async function reviewRequest(actor: Actor, input: unknown) {
       tx,
       true,
     );
+    if (
+      current.kind === "claim" &&
+      ((current.data.history as unknown[]) || []).length >= 200
+    )
+      fail("This claim has reached its revision limit");
     const own =
       current.employee_id === actor.employeeId ||
       employee.data.email === actor.email;
@@ -717,7 +779,9 @@ export async function reviewRequest(actor: Actor, input: unknown) {
         (await allRecords(actor, tx)).filter((r) => r.kind === "employee"),
       );
       if (
-        !isStaff(actor) &&
+        !(body.decision === "Paid"
+          ? hasPayroll(actor, "pay")
+          : isStaff(actor)) &&
         (actor.role !== "manager" || !team.includes(current.employee_id!))
       )
         fail("You cannot review this request", 403);
@@ -733,8 +797,8 @@ export async function reviewRequest(actor: Actor, input: unknown) {
         (current.data.payrollId || current.data.voucherId)
       )
         fail("Record payment through the linked payment voucher", 409);
-      if (body.decision === "Paid" && !isStaff(actor))
-        fail("Only HR can mark a claim as paid", 403);
+      if (body.decision === "Paid" && !hasPayroll(actor, "pay"))
+        fail("Payroll payment permission required", 403);
       const policy =
         current.kind === "leave" || current.kind === "claim"
           ? await selectedPolicy(
@@ -760,6 +824,20 @@ export async function reviewRequest(actor: Actor, input: unknown) {
                 JSON.stringify({
                   ...current.data,
                   reviewNote: body.note,
+                  ...(current.kind === "claim"
+                    ? {
+                        history: [
+                          ...((current.data.history as unknown[]) || []),
+                          {
+                            at: new Date().toISOString(),
+                            by: actor.name,
+                            actorId: actor.userId,
+                            action: "Manager approved",
+                            note: body.note,
+                          },
+                        ],
+                      }
+                    : {}),
                   managerApprovedBy: actor.userId,
                   managerApprovedAt: new Date().toISOString(),
                 }),
@@ -808,6 +886,30 @@ export async function reviewRequest(actor: Actor, input: unknown) {
     }
     const data: Data = {
       ...current.data,
+      ...(current.kind === "claim"
+        ? {
+            history: [
+              ...((current.data.history as unknown[]) || []),
+              {
+                at: new Date().toISOString(),
+                by: actor.name,
+                actorId: actor.userId,
+                action: body.decision,
+                note: body.note,
+                snapshot:
+                  body.decision === "Returned"
+                    ? {
+                        category: current.data.category,
+                        amount: current.data.amount,
+                        date: current.data.date,
+                        description: current.data.description,
+                        receiptId: current.data.receiptId,
+                      }
+                    : undefined,
+              },
+            ],
+          }
+        : {}),
       status: body.decision,
       reviewedBy: actor.userId,
       reviewNote: body.note,
@@ -911,7 +1013,7 @@ export async function reviewRequest(actor: Actor, input: unknown) {
       actor,
       `${body.decision} ${current.kind.replaceAll("_", " ")}`,
       body.note || "Your request was reviewed.",
-      `/?view=${current.kind === "leave" ? "leave" : current.kind === "claim" ? "claims" : "time"}`,
+      `/?view=${current.kind === "leave" ? "leave" : current.kind === "claim" ? "claims" : "work-requests"}`,
       employee.id,
     );
     await audit(tx, actor, `${body.decision} ${current.kind}`, current.id);
@@ -1025,41 +1127,113 @@ export async function clock(actor: Actor, input: unknown) {
   });
 }
 export async function generatePayroll(actor: Actor, input: unknown) {
-  if (!isStaff(actor)) fail("Only HR can prepare payroll", 403);
-  const { period, departmentId, employeeId } = z
-    .object({
-      period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
-      departmentId: z.uuid().optional(),
-      employeeId: z.uuid().optional(),
-    })
-    .parse(input);
+  if (!hasPayroll(actor, "prepare"))
+    fail("Payroll preparation permission required", 403);
+  const body = payRunInput.parse(input);
+  const { departmentId, employeeId } = body;
   return transaction(async (tx) => {
     await tx.query("SELECT id FROM companies WHERE id=$1 FOR UPDATE", [
       actor.companyId,
     ]);
-    const employees = (
-      await tx.query<HRRecord>(
-        "SELECT * FROM hr_records WHERE company_id=$1 AND kind='employee' AND data->>'status'='Active' AND data->>'startDate'<=$2",
-        [actor.companyId, period + "-31"],
-      )
-    ).rows;
+    if (departmentId) await recordById(actor, departmentId, "department", tx);
+    if (employeeId) await recordById(actor, employeeId, "employee", tx);
     const records = await allRecords(actor, tx),
       company = await getCompany(actor, tx);
+    let run = body.runId
+      ? await recordById(actor, body.runId, "payroll_run", tx, true)
+      : null;
+    const dates = run
+      ? {
+          cycle: String(run.data.cycle),
+          startDate: String(run.data.startDate),
+          endDate: String(run.data.endDate),
+          payDate: String(run.data.payDate),
+          period: String(run.data.period),
+          finalInMonth: !!run.data.finalInMonth,
+        }
+      : payRunDates(body);
+    const { period } = dates;
+    if (run?.data.status === "Published")
+      fail("Published pay runs are immutable", 409);
+    if (
+      !run &&
+      (body.cycle ||
+        body.startDate ||
+        body.endDate ||
+        body.payDate ||
+        body.title)
+    ) {
+      const key = [
+        dates.cycle,
+        dates.startDate,
+        dates.endDate,
+        dates.payDate,
+        departmentId || "",
+        employeeId || "",
+        body.title || "",
+      ].join("|");
+      run =
+        records.find((r) => r.kind === "payroll_run" && r.data.key === key) ||
+        null;
+      if (!run)
+        run = await insertRecord(tx, actor, "payroll_run", {
+          ...schemas.payroll_run.parse({
+            ...dates,
+            title:
+              body.title ||
+              `${dates.cycle} · ${dates.startDate} to ${dates.endDate}`,
+            status: "Draft",
+            preparedBy: actor.userId,
+          }),
+          key,
+          departmentId,
+          employeeId,
+        });
+      if (run.data.status === "Published")
+        fail("This pay run was already published", 409);
+    }
+    const selectedDepartment = run?.data.departmentId || departmentId,
+      selectedEmployee = run?.data.employeeId || employeeId;
+    const employees = records.filter(
+      (r) =>
+        r.kind === "employee" &&
+        r.data.status !== "Onboarding" &&
+        String(r.data.startDate) <= dates.endDate &&
+        (!r.data.endDate || String(r.data.endDate) >= dates.startDate) &&
+        (r.data.status !== "Archived" ||
+          dates.cycle === "Final settlement" ||
+          !!r.data.endDate),
+    );
     let created = 0;
     for (const employee of employees.filter(
       (e) =>
-        (!departmentId || e.data.departmentId === departmentId) &&
-        (!employeeId || e.id === employeeId),
+        (!selectedDepartment || e.data.departmentId === selectedDepartment) &&
+        (!selectedEmployee || e.id === selectedEmployee),
     )) {
       if (
-        (
-          await tx.query(
-            "SELECT id FROM hr_records WHERE company_id=$1 AND employee_id=$2 AND kind='payroll' AND data->>'period'=$3",
-            [actor.companyId, employee.id, period],
-          )
-        ).rows.length
+        records.some(
+          (r) =>
+            r.kind === "payroll" &&
+            r.employee_id === employee.id &&
+            (run
+              ? r.data.runId === run.id
+              : !r.data.runId && r.data.period === period),
+        )
       )
         continue;
+      if (
+        dates.cycle !== "Off-cycle" &&
+        records.some(
+          (r) =>
+            r.kind === "payroll" &&
+            r.employee_id === employee.id &&
+            overlapsPay(r.data, dates.startDate, dates.endDate),
+        )
+      )
+        fail(
+          `Pay dates overlap an existing payslip for ${employee.data.name}. Choose a non-overlapping run.`,
+          409,
+        );
       const earnings = payrollInputs(
         employee,
         period,
@@ -1067,9 +1241,13 @@ export async function generatePayroll(actor: Actor, input: unknown) {
         company.settings.workDays,
         await companyHolidays(tx, actor, String(employee.data.state || "")),
         company.settings.overtimeRates,
+        body.cycle || run ? dates : undefined,
       );
       const data = schemas.payroll.parse({
         period,
+        ...(run ? { ...dates, runId: run.id } : {}),
+        preparedBy: actor.userId,
+        statutoryMode: dates.cycle === "Monthly" ? "Monthly" : "Manual",
         allowance: 0,
         bonus: 0,
         epfEmployee: 0,
@@ -1092,28 +1270,85 @@ export async function generatePayroll(actor: Actor, input: unknown) {
       });
       Object.assign(data, payrollTotals(data));
       if (
+        dates.cycle === "Monthly" &&
         employee.data.taxProfileVerified &&
         employee.data.epfCategory !== "Manual" &&
         employee.data.taxScheme !== "Manual" &&
         period.startsWith("2026-")
       ) {
-        const amounts = calculateStatutory(
-          employee.data,
-          data,
-          records.filter(
-            (r) => r.kind === "payroll" && r.employee_id === employee.id,
-          ),
+        const history = records.filter(
+          (r) => r.kind === "payroll" && r.employee_id === employee.id,
         );
+        const amounts = history.some(
+          (r) => r.data.status === "Published" && r.data.period === period,
+        )
+          ? reconcileRun(employee.data, { ...data, id: "new-draft" }, history)
+          : calculateStatutory(employee.data, data, history);
         Object.assign(data, amounts, payrollTotals({ ...data, ...amounts }));
       }
       await insertRecord(tx, actor, "payroll", data, employee.id);
       created++;
     }
-    return { created };
+    return { created, runId: run?.id || null, period };
+  });
+}
+/** Refresh changing source records without deleting the draft or losing manual adjustments. */
+export async function refreshPayroll(actor: Actor, input: unknown) {
+  if (!hasPayroll(actor, "prepare"))
+    fail("Payroll preparation permission required", 403);
+  const { id } = z.object({ id: z.uuid() }).parse(input);
+  return transaction(async (tx) => {
+    await tx.query("SELECT id FROM companies WHERE id=$1 FOR UPDATE", [
+      actor.companyId,
+    ]);
+    const draft = await recordById(actor, id, "payroll", tx, true);
+    if (draft.data.status !== "Draft")
+      fail("Published payslips are immutable", 409);
+    const employee = await recordById(
+        actor,
+        draft.employee_id!,
+        "employee",
+        tx,
+      ),
+      company = await getCompany(actor, tx),
+      records = await allRecords(actor, tx);
+    const earnings = payrollInputs(
+      employee,
+      String(draft.data.period),
+      records,
+      company.settings.workDays,
+      await companyHolidays(tx, actor, String(employee.data.state || "")),
+      company.settings.overtimeRates,
+      draft.data.runId
+        ? {
+            startDate: String(draft.data.startDate),
+            endDate: String(draft.data.endDate),
+            cycle: String(draft.data.cycle),
+          }
+        : undefined,
+    );
+    const data = {
+      ...draft.data,
+      ...earnings,
+      calculation: {},
+      reviewed: false,
+      statutoryMode:
+        draft.data.cycle && draft.data.cycle !== "Monthly"
+          ? "Manual"
+          : "Monthly",
+    };
+    Object.assign(data, payrollTotals(data));
+    await tx.query(
+      "UPDATE hr_records SET data=$1,updated_at=now() WHERE company_id=$2 AND id=$3",
+      [JSON.stringify(data), actor.companyId, id],
+    );
+    await audit(tx, actor, "Refreshed payroll inputs", id);
+    return data;
   });
 }
 export async function recalculatePayroll(actor: Actor, input: unknown) {
-  if (!isStaff(actor)) fail("Only HR can calculate payroll", 403);
+  if (!hasPayroll(actor, "prepare"))
+    fail("Payroll preparation permission required", 403);
   const { id } = z.object({ id: z.uuid() }).parse(input);
   return transaction(async (tx) => {
     await tx.query("SELECT id FROM companies WHERE id=$1 FOR UPDATE", [
@@ -1131,8 +1366,20 @@ export async function recalculatePayroll(actor: Actor, input: unknown) {
       history = (await allRecords(actor, tx)).filter(
         (r) => r.kind === "payroll" && r.employee_id === employee.id,
       );
-    const amounts = calculateStatutory(employee.data, draft.data, history),
-      data = {
+    const amounts: Data =
+        (draft.data.cycle && draft.data.cycle !== "Monthly") ||
+        history.some(
+          (r) =>
+            r.data.status === "Published" &&
+            r.data.period === draft.data.period,
+        )
+          ? reconcileRun(
+              employee.data,
+              { ...draft.data, id: draft.id },
+              history,
+            )
+          : calculateStatutory(employee.data, draft.data, history),
+      data: Data = {
         ...draft.data,
         ...amounts,
         reviewed: false,
@@ -1147,9 +1394,17 @@ export async function recalculatePayroll(actor: Actor, input: unknown) {
   });
 }
 export async function publishPayroll(actor: Actor, input: unknown) {
-  if (!isStaff(actor)) fail("Only HR can publish payslips", 403);
-  const { period } = z
-    .object({ period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) })
+  if (!hasPayroll(actor, "approve"))
+    fail("Payroll approval permission required", 403);
+  const { period, runId } = z
+    .object({
+      period: z
+        .string()
+        .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+        .optional(),
+      runId: z.uuid().optional(),
+    })
+    .refine((v) => !!v.period || !!v.runId, "Choose a pay run")
     .parse(input);
   return transaction(async (tx) => {
     await tx.query("SELECT id FROM companies WHERE id=$1 FOR UPDATE", [
@@ -1157,18 +1412,49 @@ export async function publishPayroll(actor: Actor, input: unknown) {
     ]);
     const drafts = (
       await tx.query<HRRecord>(
-        "SELECT * FROM hr_records WHERE company_id=$1 AND kind='payroll' AND data->>'period'=$2 AND data->>'status'='Draft' FOR UPDATE",
-        [actor.companyId, period],
+        "SELECT * FROM hr_records WHERE company_id=$1 AND kind='payroll' AND (($3::text IS NOT NULL AND data->>'runId'=$3) OR ($3::text IS NULL AND data->>'runId' IS NULL AND data->>'period'=$2)) AND data->>'status'='Draft' FOR UPDATE",
+        [actor.companyId, period || null, runId || null],
       )
     ).rows;
     if (!drafts.length) fail("No draft payslips for this period");
     if (drafts.some((r) => !r.data.reviewed))
       fail("Review every draft and its statutory deductions before publishing");
+    if (
+      actor.role !== "owner" &&
+      drafts.some((r) => r.data.preparedBy === actor.userId)
+    )
+      fail("Another payroll approver must publish your prepared run", 403);
     for (const draft of drafts) {
+      const calculation = draft.data.calculation as Data | undefined;
+      if (calculation && Object.keys(calculation).length) {
+        const published = (await allRecords(actor, tx))
+          .filter(
+            (r) =>
+              r.kind === "payroll" &&
+              r.employee_id === draft.employee_id &&
+              r.data.period === draft.data.period &&
+              r.data.status === "Published",
+          )
+          .map((r) => r.id)
+          .sort();
+        const calculatedAgainst = [
+          ...((calculation.priorPayslipIds as string[]) || []),
+        ].sort();
+        if (JSON.stringify(published) !== JSON.stringify(calculatedAgainst))
+          fail(
+            "Monthly totals changed. Recalculate deductions and review this draft again.",
+            409,
+          );
+      }
       await tx.query(
         "UPDATE hr_records SET data=$1,updated_at=now() WHERE company_id=$2 AND id=$3",
         [
-          JSON.stringify({ ...draft.data, status: "Published" }),
+          JSON.stringify({
+            ...draft.data,
+            status: "Published",
+            approvedBy: actor.userId,
+            approvedAt: new Date().toISOString(),
+          }),
           actor.companyId,
           draft.id,
         ],
@@ -1206,6 +1492,21 @@ export async function publishPayroll(actor: Actor, input: unknown) {
         String(draft.data.period),
         "/?view=payroll",
         draft.employee_id!,
+      );
+    }
+    if (runId) {
+      const run = await recordById(actor, runId, "payroll_run", tx, true);
+      await tx.query(
+        "UPDATE hr_records SET data=$1,updated_at=now() WHERE company_id=$2 AND id=$3",
+        [
+          JSON.stringify({
+            ...run.data,
+            status: "Published",
+            approvedBy: actor.userId,
+          }),
+          actor.companyId,
+          runId,
+        ],
       );
     }
     await audit(tx, actor, "Published payroll", null, {

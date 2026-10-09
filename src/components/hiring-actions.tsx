@@ -12,11 +12,16 @@ import {
 } from "./ui/dialog";
 import { useWorkspace } from "./workspace-context";
 import type { HRRecord } from "@/lib/types";
+import { toast } from "sonner";
 export function HireButton({ candidate }: { candidate: HRRecord }) {
-  const { act } = useWorkspace(),
+  const { act, workspace } = useWorkspace(),
     [open, setOpen] = useState(false),
+    [invitationUrl, setInvitationUrl] = useState(""),
     [date, setDate] = useState(""),
-    [salary, setSalary] = useState(0);
+    [salary, setSalary] = useState(0),
+    [employmentType, setEmploymentType] = useState(
+      workspace.company.settings.employeeTypes[0],
+    );
   return (
     <>
       <Button
@@ -36,34 +41,74 @@ export function HireButton({ candidate }: { candidate: HRRecord }) {
               and assessments follow the record.
             </DialogDescription>
           </DialogHeader>
-          <Label htmlFor="hire-start">Start date</Label>
-          <Input
-            type="date"
-            id="hire-start"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
-          <Label htmlFor="hire-salary">Monthly base salary (RM)</Label>
-          <Input
-            type="number"
-            id="hire-salary"
-            min={0}
-            value={salary}
-            onChange={(e) => setSalary(Number(e.target.value))}
-          />
-          <Button
-            disabled={!date}
-            onClick={async () => {
-              const result = await act(
-                "candidate-hire",
-                { id: candidate.id, data: { startDate: date, salary } },
-                "Employee profile created",
-              );
-              if (result) setOpen(false);
-            }}
-          >
-            Create employee & checklist
-          </Button>
+          {invitationUrl ? (
+            <div className="space-y-3">
+              <p>
+                Employee access is ready. Share this private invitation within
+                three days.
+              </p>
+              <p className="break-all">{invitationUrl}</p>
+              <Button
+                variant="outline"
+                onClick={() =>
+                  navigator.clipboard
+                    .writeText(invitationUrl)
+                    .then(() => toast.success("Invitation copied"))
+                    .catch(() => toast.error("Select the link to copy it"))
+                }
+              >
+                Copy invitation
+              </Button>
+              <Button onClick={() => setOpen(false)}>Done</Button>
+            </div>
+          ) : (
+            <>
+              <Label htmlFor="hire-start">Start date</Label>
+              <Input
+                type="date"
+                id="hire-start"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
+              <Label htmlFor="hire-type">Employment type</Label>
+              <select
+                id="hire-type"
+                className="native-select"
+                value={employmentType}
+                onChange={(e) => setEmploymentType(e.target.value)}
+              >
+                {workspace.company.settings.employeeTypes.map((type) => (
+                  <option key={type}>{type}</option>
+                ))}
+              </select>
+              <Label htmlFor="hire-salary">Monthly base salary (RM)</Label>
+              <Input
+                type="number"
+                id="hire-salary"
+                min={0}
+                value={salary}
+                onChange={(e) => setSalary(Number(e.target.value))}
+              />
+              <Button
+                disabled={!date}
+                onClick={async () => {
+                  const result = (await act(
+                    "candidate-hire",
+                    {
+                      id: candidate.id,
+                      data: { startDate: date, salary, employmentType },
+                    },
+                    "Employee profile created",
+                  )) as { invitationUrl?: string } | undefined;
+                  if (result?.invitationUrl)
+                    setInvitationUrl(result.invitationUrl);
+                  else if (result) setOpen(false);
+                }}
+              >
+                Create employee & checklist
+              </Button>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </>

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { claimPeriods } from "./claim-period";
 const text = z.string().trim().min(1).max(200),
   long = z.string().trim().max(24000).default(""),
   id = z.uuid(),
@@ -161,7 +162,7 @@ export const extendedSchemas = {
   claim_type: z.object({
     name: text,
     limit: money,
-    period: z.enum(["Annual", "Monthly", "Per request"]),
+    period: z.enum(claimPeriods),
     departmentId: nullableId,
     receiptRequired: z.boolean().default(true),
     mileageRate: money,

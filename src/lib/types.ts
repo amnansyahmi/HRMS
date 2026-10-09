@@ -1,5 +1,8 @@
 export const kinds = [
+  "profile_change",
   "employee",
+  "designation",
+  "payroll_run",
   "department",
   "shift",
   "attendance",
@@ -52,6 +55,7 @@ export interface Actor {
   employeeId: string | null;
   name: string;
   email: string;
+  payrollAccess?: import("./workflow-config").PayrollCapability[] | null;
 }
 export interface Company {
   id: string;
@@ -66,6 +70,16 @@ export interface Company {
       "Rest day": number;
       "Public holiday": number;
     };
+    employeeStatuses: {
+      name: string;
+      access: "Active" | "Onboarding" | "Archived";
+    }[];
+    employeeTypes: string[];
+    clockReminderMinutes: number;
+    aiSpecialists: Record<
+      import("./workflow-config").Specialist,
+      { enabled: boolean; tools: string[] }
+    >;
     aiEnabled: boolean;
     aiActionsEnabled: boolean;
     aiAgents: {
@@ -74,6 +88,7 @@ export interface Company {
       resume: boolean;
       meeting: boolean;
       preferences: boolean;
+      chro: boolean;
     };
     careersIntro: string;
     registrationNo: string;
@@ -91,6 +106,7 @@ export interface Workspace {
     email: string;
     role: Role;
     employee_id: string | null;
+    payroll_access: import("./workflow-config").PayrollCapability[] | null;
   }[];
   audit: {
     id: string;

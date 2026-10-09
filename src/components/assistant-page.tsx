@@ -24,7 +24,13 @@ import { api } from "@/lib/client";
 import { toast } from "sonner";
 import { useWorkspace } from "./workspace-context";
 import { NativeSelect } from "./common";
+import {
+  specialistLabels,
+  specialistNames,
+  specialistAllows,
+} from "@/lib/workflow-config";
 import { isStaff } from "@/lib/types";
+import { Dictation, ReadAnswer } from "./voice-controls";
 export type AssistantIntent = {
   mode: string;
   recordId?: string;
@@ -38,7 +44,14 @@ type Message = {
   role: string;
   content: string;
   sources: Source[];
-  cards?: { id: string; action: string; label: string; expiresAt: string }[];
+  cards?: {
+    id: string;
+    action: string;
+    label: string;
+    expiresAt: string;
+    preview?: Record<string, unknown>;
+    requiresLocation?: boolean;
+  }[];
 };
 export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
   const { workspace, go, edit, act } = useWorkspace(),
@@ -60,6 +73,11 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
       toast.error((e as Error).message);
     }
   }, []);
+  const appendDictation = useCallback(
+    (text: string) =>
+      setMessage((old) => `${old}${old ? " " : ""}${text}`.slice(0, 4000)),
+    [],
+  );
   useEffect(() => {
     let active = true;
     api<Message[]>("/api/ai")
@@ -85,8 +103,9 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
         : mode === "preferences"
           ? r.kind === "assessment_result" &&
             !!r.data.submittedAt &&
-            (r.data.assessmentSnapshot as { type: string }).type ===
-              "Work preferences"
+            ["Work preferences", "DISC", "DOPE"].includes(
+              (r.data.assessmentSnapshot as { type: string }).type,
+            )
           : false,
   );
   const recordLabel = (id: string) => {
@@ -195,7 +214,7 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
           <h1>People AI</h1>
           <span>
             {workspace.ai.model || "ai-nonymauz-cloud"}
-            <span className="dot-separator">·</span>Read-only assistant
+            <span className="dot-separator">·</span>Changes require confirmation
           </span>
         </div>
         <div className="table-actions">
@@ -325,19 +344,74 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                           Confirm this change. Your permissions and the latest
                           record will be checked.
                         </p>
+                        {card.preview ? (
+                          card.action === "letter-draft" ? (
+                            <div className="action-preview preserve-lines">
+                              <strong>{String(card.preview.title)}</strong>
+                              <p>{String(card.preview.body)}</p>
+                              <small>
+                                Save as draft only ·{" "}
+                                {String(card.preview.effectiveDate)}
+                              </small>
+                            </div>
+                          ) : (
+                            <pre className="action-preview">
+                              {JSON.stringify(card.preview, null, 2)}
+                            </pre>
+                          )
+                        ) : null}
                         <Button
                           size="sm"
                           onClick={async () => {
+                            let coordinates:
+                              | {
+                                  latitude: number;
+                                  longitude: number;
+                                  accuracy: number;
+                                }
+                              | undefined;
+                            if (card.requiresLocation) {
+                              try {
+                                const position =
+                                  await new Promise<GeolocationPosition>(
+                                    (resolve, reject) =>
+                                      navigator.geolocation.getCurrentPosition(
+                                        resolve,
+                                        reject,
+                                        {
+                                          enableHighAccuracy: true,
+                                          maximumAge: 0,
+                                          timeout: 15000,
+                                        },
+                                      ),
+                                  );
+                                coordinates = {
+                                  latitude: position.coords.latitude,
+                                  longitude: position.coords.longitude,
+                                  accuracy: position.coords.accuracy,
+                                };
+                              } catch {
+                                toast.error(
+                                  "Allow precise location to confirm clock-in",
+                                );
+                                return;
+                              }
+                            }
                             const result = await act(
                               "ai-confirm",
-                              { id: card.id },
+                              { id: card.id, coordinates },
                               "Confirmed action completed",
                             );
                             if (result)
                               setMessages((rows) =>
                                 rows.map((message) =>
                                   message === m
-                                    ? { ...message, cards: [] }
+                                    ? {
+                                        ...message,
+                                        cards: message.cards?.filter(
+                                          (c) => c.id !== card.id,
+                                        ),
+                                      }
                                     : message,
                                 ),
                               );
@@ -345,9 +419,34 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                         >
                           Confirm action
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={async () => {
+                            const result = await act("ai-cancel", {
+                              id: card.id,
+                            });
+                            if (result)
+                              setMessages((rows) =>
+                                rows.map((row) =>
+                                  row === m
+                                    ? {
+                                        ...row,
+                                        cards: row.cards?.filter(
+                                          (c) => c.id !== card.id,
+                                        ),
+                                      }
+                                    : row,
+                                ),
+                              );
+                          }}
+                        >
+                          Cancel
+                        </Button>
                       </div>
                     ))}
                     <div className="message-controls">
+                      <ReadAnswer text={m.content} />
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -419,26 +518,45 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
         <div ref={end} />
       </div>
       <div className="composer-area">
+        <Dictation onTranscript={appendDictation} disabled={busy} />
         <div className="composer-options">
-          {staff ? (
-            <NativeSelect
-              label="Assistant mode"
-              value={mode}
-              onChange={(v) => {
-                setMode(v);
-                setRecordId("");
-              }}
-              options={[
-                { value: "hr", label: "HR assistant" },
-                { value: "recruit", label: "Recruit assistant" },
-                { value: "resume", label: "Resume review" },
-                { value: "meeting", label: "Meeting summary" },
-                { value: "preferences", label: "Work preferences" },
-              ]}
-            />
-          ) : (
-            <span>HR assistant</span>
-          )}
+          <NativeSelect
+            label="Assistant mode"
+            value={mode}
+            onChange={(v) => {
+              setMode(v);
+              setRecordId("");
+            }}
+            options={[
+              { value: "hr", label: "HR assistant" },
+              ...(workspace.actor.role === "owner" &&
+              workspace.company.settings.aiAgents.chro
+                ? [{ value: "chro", label: "CHRO brief · read only" }]
+                : []),
+              ...specialistNames
+                .filter(
+                  (name) =>
+                    specialistAllows(
+                      workspace.company.settings,
+                      name,
+                      "read",
+                    ) &&
+                    (name !== "recruitment" || staff),
+                )
+                .map((name) => ({
+                  value: name,
+                  label: specialistLabels[name] + " specialist",
+                })),
+              ...(staff
+                ? [
+                    { value: "resume", label: "Resume review" },
+                    { value: "meeting", label: "Meeting summary" },
+                    { value: "preferences", label: "Work preferences" },
+                  ]
+                : []),
+            ]}
+          />
+
           {["resume", "meeting", "preferences"].includes(mode) ? (
             <NativeSelect
               label="Record for AI review"

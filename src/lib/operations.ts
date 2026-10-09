@@ -1,3 +1,4 @@
+import { hasPayroll } from "./workflow-config";
 import { parseCalendar } from "./calendar";
 import { localDate } from "./calculations";
 import { randomUUID } from "node:crypto";
@@ -52,11 +53,47 @@ export async function operation(
       data: z.record(z.string(), z.unknown()).default({}),
     })
     .parse(input);
+  if (action === "holidays-import") {
+    staff(actor);
+    const rows = z.array(schemas.holiday).min(1).max(100).parse(body.data.rows);
+    if (body.data.reviewed !== true)
+      fail("Review the dates and applicable states before importing");
+    return transaction(async (tx) => {
+      await tx.query("SELECT id FROM companies WHERE id=$1 FOR UPDATE", [
+        actor.companyId,
+      ]);
+      const existing = (
+        await tx.query<{ data: Data }>(
+          "SELECT data FROM hr_records WHERE company_id=$1 AND kind='holiday'",
+          [actor.companyId],
+        )
+      ).rows;
+      const key = (row: Data) =>
+        `${row.date}|${String(row.state).trim().toLowerCase()}|${String(row.title).trim().toLowerCase()}`;
+      const keys = new Set(existing.map((r) => key(r.data)));
+      let created = 0;
+      for (const row of rows) {
+        if (keys.has(key(row))) continue;
+        await insertRecord(tx, actor, "holiday", row);
+        keys.add(key(row));
+        created++;
+      }
+      return { created, skipped: rows.length - created };
+    });
+  }
   if (action === "notifications-read") {
     await db.query(
       "UPDATE notifications SET read_at=now() WHERE company_id=$1 AND user_id=$2 AND read_at IS NULL",
       [actor.companyId, actor.userId],
     );
+    return { ok: true };
+  }
+  if (action === "notification-read") {
+    const result = await db.query(
+      "UPDATE notifications SET read_at=coalesce(read_at,now()) WHERE id=$1 AND company_id=$2 AND user_id=$3 RETURNING id",
+      [z.uuid().parse(body.id), actor.companyId, actor.userId],
+    );
+    if (!result.rows.length) fail("Notification unavailable", 404);
     return { ok: true };
   }
   if (action === "operations-status") {
@@ -335,10 +372,12 @@ export async function operation(
         actor,
         "letter",
         schemas.letter.parse({
-          title: `${type} — ${record.data.name}`,
+          title: body.data.title ?? `${type} — ${record.data.name}`,
           type,
           effectiveDate,
-          body: `Dear ${record.data.name},\n\n${type === "Confirmation" ? `We confirm your appointment as ${record.data.title} with effect from ${effectiveDate}.` : type === "Offer" ? `We offer you the position of ${record.data.title}, commencing ${record.data.startDate}, with a monthly base salary of RM ${Number(record.data.salary).toFixed(2)}.` : `Re: ${type} concerning your role as ${record.data.title}.\n\n[HR: add the circumstances, terms and next steps before issuing.]`}\n\nYours sincerely,\n${(await getCompany(actor, tx)).name}`,
+          body:
+            body.data.body ??
+            `Dear ${record.data.name},\n\n${type === "Confirmation" ? `We confirm your appointment as ${record.data.title} with effect from ${effectiveDate}.` : type === "Offer" ? `We offer you the position of ${record.data.title}, commencing ${record.data.startDate}, with a monthly base salary of RM ${Number(record.data.salary).toFixed(2)}.` : `Re: ${type} concerning your role as ${record.data.title}.\n\n[HR: add the circumstances, terms and next steps before issuing.]`}\n\nYours sincerely,\n${(await getCompany(actor, tx)).name}`,
           status: "Draft",
         }),
         record.id,
@@ -433,6 +472,8 @@ export async function operation(
           departmentId: job.data.departmentId,
           startDate: body.data.startDate,
           status: "Onboarding",
+          employmentType:
+            body.data.employmentType || job.data.employmentType || "Full-time",
           salary: body.data.salary || 0,
         }),
       );
@@ -481,7 +522,11 @@ export async function operation(
         }),
         employee.id,
       );
-      return { employeeId: employee.id };
+      return {
+        employeeId: employee.id,
+        invitationUrl: (employee as HRRecord & { invitationUrl?: string })
+          .invitationUrl,
+      };
     }
     if (action === "evaluation-submit" || action === "evaluation-review") {
       if (record.kind !== "evaluation" || record.data.status === "Final")
@@ -556,7 +601,8 @@ export async function operation(
       return { score };
     }
     if (action === "voucher-prepare") {
-      staff(actor);
+      if (!hasPayroll(actor, "pay"))
+        fail("Payroll payment permission required", 403);
       const ids = z
         .array(z.uuid())
         .min(1)
@@ -602,7 +648,8 @@ export async function operation(
       return voucher;
     }
     if (action === "voucher-pay") {
-      staff(actor);
+      if (!hasPayroll(actor, "pay"))
+        fail("Payroll payment permission required", 403);
       if (
         record.kind !== "payment_voucher" ||
         record.data.status !== "Prepared"
