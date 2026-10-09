@@ -601,6 +601,7 @@ describe("AI integration boundary", () => {
     );
     const body = JSON.parse(String(init.body));
     expect(body.model).toBe("test-alias");
+    expect(body.stream).toBe(false);
     expect(body.use_tools).toBe(false);
     expect(body.use_rag).toBe(false);
     expect(
