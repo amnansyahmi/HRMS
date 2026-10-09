@@ -1,13 +1,8 @@
 "use client";
 import { useState } from "react";
-import {
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  CalendarDays,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { useWorkspace } from "./workspace-context";
-import { PageHeader, Empty, NativeSelect } from "./common";
+import { PageHeader, NativeSelect } from "./common";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { localDate } from "@/lib/calculations";
@@ -18,15 +13,16 @@ import {
 } from "@/lib/hr-calendar";
 import { isStaff } from "@/lib/types";
 
-export function CalendarPage() {
+export function CalendarPage({ compact = false }: { compact?: boolean }) {
   const { workspace } = useWorkspace(),
     today = localDate(new Date(), workspace.company.settings.timezone);
   const [month, setMonth] = useState(today.slice(0, 7)),
+    [selected, setSelected] = useState(today),
     [scope, setScope] = useState(
-      workspace.actor.role === "employee" ? "mine" : "team",
+      compact || workspace.actor.role === "employee" ? "mine" : "team",
     ),
     [category, setCategory] = useState("All"),
-    [pending, setPending] = useState(false);
+    [pending, setPending] = useState(compact);
   const start = `${month}-01`,
     end = addCalendarDays(
       `${month}-01`,
@@ -42,7 +38,11 @@ export function CalendarPage() {
     end,
     scope,
     pending,
-  ).filter((e) => category === "All" || e.kind === category);
+  ).filter((e) =>
+    compact
+      ? ["leave", "holiday", "time_off"].includes(e.kind)
+      : category === "All" || e.kind === category,
+  );
   const firstDay = new Date(start + "T00:00:00Z").getUTCDay(),
     count = Number(end.slice(8));
   const days = Array.from({ length: count }, (_, i) =>
@@ -52,6 +52,7 @@ export function CalendarPage() {
     const d = new Date(start + "T00:00:00Z");
     d.setUTCMonth(d.getUTCMonth() + amount);
     setMonth(d.toISOString().slice(0, 7));
+    setSelected(d.toISOString().slice(0, 10));
   };
   const canTeam =
     isStaff(workspace.actor) || workspace.actor.role === "manager";
@@ -64,20 +65,24 @@ export function CalendarPage() {
   });
   return (
     <>
-      <div className="daily-header">
-        <PageHeader
-          title="Team calendar"
-          description={`Approved time away, workplace holidays and rotating shifts. Times use ${workspace.company.settings.timezone}.`}
-          action={
-            <Button variant="outline" asChild>
-              <a href={`/api/export?${download}`}>
-                <Download size={15} />
-                Download calendar
-              </a>
-            </Button>
-          }
-        />
-      </div>
+      {!compact ? (
+        <div className="daily-header">
+          <PageHeader
+            title="Team calendar"
+            description={`Approved time away, workplace holidays and rotating shifts. Times use ${workspace.company.settings.timezone}.`}
+            action={
+              <Button variant="outline" asChild>
+                <a href={`/api/export?${download}`}>
+                  <Download size={15} />
+                  Download calendar
+                </a>
+              </Button>
+            }
+          />
+        </div>
+      ) : (
+        <h2 className="leave-calendar-heading">My leave calendar</h2>
+      )}
       <div className="calendar-toolbar">
         <div className="calendar-month">
           <Button
@@ -98,8 +103,10 @@ export function CalendarPage() {
             max="2100-12"
             value={month}
             onChange={(e) => {
-              if (/^\d{4}-(0[1-9]|1[0-2])$/.test(e.target.value))
+              if (/^\d{4}-(0[1-9]|1[0-2])$/.test(e.target.value)) {
                 setMonth(e.target.value);
+                setSelected(e.target.value + "-01");
+              }
             }}
           />
           <Button
@@ -110,57 +117,73 @@ export function CalendarPage() {
           >
             <ChevronRight size={17} />
           </Button>
-          <Button variant="ghost" onClick={() => setMonth(today.slice(0, 7))}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setMonth(today.slice(0, 7));
+              setSelected(today);
+            }}
+          >
             Today
           </Button>
         </div>
-        <NativeSelect
-          label="Calendar scope"
-          value={scope}
-          onChange={setScope}
-          options={[
-            ...(canTeam
-              ? [
-                  {
-                    value: "team",
-                    label: isStaff(workspace.actor) ? "Workspace" : "My team",
-                  },
-                ]
-              : []),
-            { value: "mine", label: "My calendar" },
-          ]}
-        />
-        <NativeSelect
-          label="Calendar category"
-          value={category}
-          onChange={setCategory}
-          options={[
-            { value: "All", label: "All events" },
-            { value: "leave", label: "Leave" },
-            { value: "time_off", label: "Time off" },
-            { value: "shift", label: "Shifts" },
-            { value: "holiday", label: "Holidays" },
-          ]}
-        />
+        {!compact ? (
+          <>
+            <NativeSelect
+              label="Calendar scope"
+              value={scope}
+              onChange={setScope}
+              options={[
+                ...(canTeam
+                  ? [
+                      {
+                        value: "team",
+                        label: isStaff(workspace.actor)
+                          ? "Workspace"
+                          : "My team",
+                      },
+                    ]
+                  : []),
+                { value: "mine", label: "My calendar" },
+              ]}
+            />
+            <NativeSelect
+              label="Calendar category"
+              value={category}
+              onChange={setCategory}
+              options={[
+                { value: "All", label: "All events" },
+                { value: "leave", label: "Leave" },
+                { value: "time_off", label: "Time off" },
+                { value: "shift", label: "Shifts" },
+                { value: "holiday", label: "Holidays" },
+              ]}
+            />
+          </>
+        ) : null}
       </div>
-      <label className="calendar-pending">
-        <input
-          type="checkbox"
-          checked={pending}
-          onChange={(e) => setPending(e.target.checked)}
-        />
-        <span>
-          Show pending requests{" "}
-          <small>Pending events stay out of the downloaded calendar.</small>
-        </span>
-      </label>
-      <p className="muted calendar-note">
-        {canTeam
-          ? "You see the employees and requests available to your role."
-          : "Your calendar contains your own requests and assigned shifts."}{" "}
-        Absence events omit leave reasons, receipts and medical details.
-      </p>
-      <div className="calendar-grid">
+      {!compact ? (
+        <>
+          <label className="calendar-pending">
+            <input
+              type="checkbox"
+              checked={pending}
+              onChange={(e) => setPending(e.target.checked)}
+            />
+            <span>
+              Show pending requests{" "}
+              <small>Pending events stay out of the downloaded calendar.</small>
+            </span>
+          </label>
+          <p className="muted calendar-note">
+            {canTeam
+              ? "You see the employees and requests available to your role."
+              : "Your calendar contains your own requests and assigned shifts."}{" "}
+            Absence events omit leave reasons, receipts and medical details.
+          </p>
+        </>
+      ) : null}
+      <div className={`calendar-grid ${compact ? "calendar-compact" : ""}`}>
         <div className="calendar-weekdays">
           {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
             <span key={d}>{d}</span>
@@ -171,51 +194,72 @@ export function CalendarPage() {
             <div className="calendar-blank" key={`blank-${i}`} />
           ))}
           {days.map((d) => (
-            <section
-              className={`calendar-day ${d === today ? "calendar-today" : ""}`}
+            <button
+              type="button"
+              className={`calendar-day ${d === today ? "calendar-today" : ""} ${d === selected ? "calendar-selected" : ""}`}
               key={d}
-              aria-label={d}
+              aria-label={`${d}${events.some((e) => e.date === d) ? " · has events" : ""}`}
+              aria-pressed={d === selected}
+              onClick={() => setSelected(d)}
             >
               <strong>{Number(d.slice(8))}</strong>
-              {events
-                .filter((e) => e.date === d)
-                .map((e) => (
-                  <Event key={e.id} event={e} />
-                ))}
-            </section>
-          ))}
-        </div>
-      </div>
-      <div className="calendar-agenda">
-        {events.length ? (
-          days
-            .filter((d) => events.some((e) => e.date === d))
-            .map((d) => (
-              <section className="panel" key={d}>
-                <h2 className={d === today ? "calendar-today-label" : ""}>
-                  {new Date(d + "T00:00:00Z").toLocaleDateString("en-MY", {
-                    weekday: "short",
-                    day: "numeric",
-                    month: "short",
-                    timeZone: "UTC",
-                  })}
-                  {d === today ? " · Today" : ""}
-                </h2>
+              <span className="calendar-event-labels">
                 {events
                   .filter((e) => e.date === d)
+                  .slice(0, 3)
                   .map((e) => (
                     <Event key={e.id} event={e} />
                   ))}
-              </section>
-            ))
-        ) : (
-          <Empty
-            title="No events this month"
-            description="Approved requests, assigned shifts and holidays will appear here."
-            action={<CalendarDays size={20} />}
-          />
-        )}
+              </span>
+              <span className="calendar-dots" aria-hidden="true">
+                {[
+                  ...new Set(
+                    events
+                      .filter((e) => e.date === d)
+                      .map((e) =>
+                        e.status === "Pending" ? "pending" : e.kind,
+                      ),
+                  ),
+                ].map((kind) => (
+                  <i className={`calendar-dot-${kind}`} key={kind} />
+                ))}
+              </span>
+            </button>
+          ))}
+          {Array.from(
+            { length: (7 - ((firstDay + count) % 7)) % 7 },
+            (_, i) => (
+              <div
+                className="calendar-blank"
+                key={`end-${i}`}
+                aria-hidden="true"
+              />
+            ),
+          )}
+        </div>
       </div>
+      <section className="calendar-agenda panel" aria-live="polite">
+        <h2>
+          {new Date(selected + "T00:00:00Z").toLocaleDateString("en-MY", {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            timeZone: "UTC",
+          })}
+          {selected === today ? " · Today" : ""}
+        </h2>
+        {events.filter((e) => e.date === selected).length ? (
+          events
+            .filter((e) => e.date === selected)
+            .map((e) => <Event key={e.id} event={e} />)
+        ) : (
+          <p className="muted">No events on this day.</p>
+        )}
+        <p className="muted calendar-legend">
+          Solid dots: approved events and holidays · Outlined dots: pending
+          requests
+        </p>
+      </section>
     </>
   );
 }

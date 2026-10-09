@@ -124,6 +124,9 @@ export async function downloadFile(actor: Actor, id: string) {
           r.data.resumeFileId,
           r.data.fileId,
           r.data.evidenceId,
+          (r.data.clockInEvidence as { photoId?: string } | undefined)?.photoId,
+          (r.data.clockOutEvidence as { photoId?: string } | undefined)
+            ?.photoId,
           ...((r.data.audioIds as string[]) || []),
           ...(r.kind === "claim"
             ? (

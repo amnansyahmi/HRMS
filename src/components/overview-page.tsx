@@ -1,4 +1,5 @@
 "use client";
+import { HRDigest } from "./hr-digest";
 import {
   Users,
   Clock3,
@@ -165,6 +166,7 @@ export function OverviewPage() {
           </button>
         ))}
       </div>
+      <HRDigest />
       <div className="overview-columns">
         <section className="panel">
           <div className="panel-heading">

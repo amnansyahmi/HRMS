@@ -169,6 +169,13 @@ async function saveOneProposal(
     return { text: cleaned, cards: [] as ActionCard[] };
   let requiresLocation = false;
   if (proposal.action === "clock") {
+    if (company.settings.attendanceEvidence?.photoRequired)
+      return {
+        text:
+          cleaned +
+          "\n\nYour workplace requires a photo. Open Attendance & shifts to capture it and record your clock action.",
+        cards: [] as ActionCard[],
+      };
     if (!actor.employeeId) return { text: cleaned, cards: [] as ActionCard[] };
     const parsedClock = z
       .object({
@@ -188,7 +195,8 @@ async function saveOneProposal(
     if (parsedClock.data.locationId && !site)
       return { text: cleaned, cards: [] as ActionCard[] };
     requiresLocation =
-      parsedClock.data.action === "in" && !!site?.data.geofence;
+      !!company.settings.attendanceEvidence?.locationRequired ||
+      (parsedClock.data.action === "in" && !!site?.data.geofence);
   }
   if (proposal.action === "configure") {
     if (actor.role !== "owner")

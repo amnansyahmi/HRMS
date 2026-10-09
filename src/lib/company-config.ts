@@ -1,3 +1,4 @@
+import { checkAIConnection } from "./ai-connection";
 import { z } from "zod";
 import { audit, getCompany } from "./auth";
 import { transaction, type DB } from "./db";
@@ -48,6 +49,27 @@ export async function saveCompanyConfig(
       settings: companySettings,
     })
     .parse(input);
+  const before = await getCompany(actor);
+  const routing = body.settings.aiRouting;
+  const changed = ["generalModel", "analysisModel", "visionModel"].some(
+    (key) =>
+      routing[key as keyof typeof routing] !==
+      before.settings.aiRouting?.[key as keyof typeof routing],
+  );
+  if (
+    changed &&
+    [routing.generalModel, routing.analysisModel, routing.visionModel].some(
+      Boolean,
+    )
+  ) {
+    const catalogue = await checkAIConnection();
+    if (
+      [routing.generalModel, routing.analysisModel, routing.visionModel].some(
+        (model) => model && !catalogue.models.includes(model),
+      )
+    )
+      fail("Choose model aliases returned by the connected backend", 400);
+  }
   await transaction(async (tx) => {
     await tx.query("SELECT id FROM companies WHERE id=$1 FOR UPDATE", [
       actor.companyId,

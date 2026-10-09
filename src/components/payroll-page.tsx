@@ -1,4 +1,5 @@
 "use client";
+import { PayrollChecks } from "./payroll-checks";
 import { hasPayroll } from "@/lib/workflow-config";
 import { payCycles } from "@/lib/pay-runs-client";
 import { useState } from "react";
@@ -325,6 +326,20 @@ export function PayrollPage() {
                   </strong>
                 </div>
               </div>
+              {staff ? (
+                <PayrollChecks
+                  key={
+                    period +
+                    runId +
+                    workspace.records
+                      .filter((r) => r.kind === "payroll")
+                      .map((r) => r.updated_at)
+                      .join("")
+                  }
+                  period={period}
+                  runId={runId}
+                />
+              ) : null}
               <div className="table-wrap">
                 <table>
                   <thead>

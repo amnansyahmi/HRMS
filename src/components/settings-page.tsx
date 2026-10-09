@@ -1,4 +1,7 @@
 "use client";
+import { AIManagement } from "./ai-management";
+import { OperationsPage } from "./operations-page";
+import { isStaff } from "@/lib/types";
 import { PayrollAccessControl, SpecialistControls } from "./workflow-settings";
 import { PendingInvitations } from "./pending-invitations";
 import { SecuritySettings } from "./security-page";
@@ -37,7 +40,11 @@ import { useWorkspace } from "./workspace-context";
 import { PageHeader, Person, Status, NativeSelect } from "./common";
 import { api, shortDate } from "@/lib/client";
 import { toast } from "sonner";
-export function SettingsPage() {
+export function SettingsPage({
+  initialSection = "general",
+}: {
+  initialSection?: string;
+}) {
   const { workspace, refresh } = useWorkspace(),
     owner = workspace.actor.role === "owner",
     [name, setName] = useState(workspace.company.name),
@@ -67,7 +74,7 @@ export function SettingsPage() {
     [employeeId, setEmployeeId] = useState(""),
     [inviteLink, setInviteLink] = useState(""),
     [remove, setRemove] = useState<string | null>(null),
-    [section, setSection] = useState("general"),
+    [section, setSection] = useState(initialSection),
     employees = workspace.records.filter(
       (r) => r.kind === "employee" && r.data.status !== "Archived",
     );
@@ -167,9 +174,15 @@ export function SettingsPage() {
           >
             <option value="general">General</option>
             {owner ? <option value="employees">People rules</option> : null}
+            {isStaff(workspace.actor) ? (
+              <option value="policies">HR policies</option>
+            ) : null}
             <option value="security">Account security</option>
             {owner ? <option value="access">Team access</option> : null}
             <option value="ai">AI connection</option>
+            {owner ? (
+              <option value="notifications">Notifications</option>
+            ) : null}
             {owner ? <option value="setup">Deployment setup</option> : null}
             {owner ? <option value="activity">Activity</option> : null}
           </select>
@@ -183,6 +196,12 @@ export function SettingsPage() {
             <TabsTrigger value="employees">
               <Users size={17} />
               People rules
+            </TabsTrigger>
+          ) : null}
+          {isStaff(workspace.actor) ? (
+            <TabsTrigger value="policies">
+              <SlidersHorizontal size={17} />
+              HR policies
             </TabsTrigger>
           ) : null}
           <TabsTrigger value="security">
@@ -200,6 +219,12 @@ export function SettingsPage() {
             AI connection
           </TabsTrigger>
           {owner ? (
+            <TabsTrigger value="notifications">
+              <MessageSquare size={17} />
+              Notifications
+            </TabsTrigger>
+          ) : null}
+          {owner ? (
             <TabsTrigger value="setup">
               <SlidersHorizontal size={17} />
               Deployment setup
@@ -213,6 +238,11 @@ export function SettingsPage() {
           ) : null}
         </TabsList>
         <div className="settings-body">
+          {isStaff(workspace.actor) ? (
+            <TabsContent value="policies">
+              <OperationsPage view="hr-policies" />
+            </TabsContent>
+          ) : null}
           <TabsContent value="employees">
             {owner ? (
               <>
@@ -223,6 +253,47 @@ export function SettingsPage() {
                     access; Onboarding marks a joining employee; Archived ends
                     access when applied to an employee. Existing labels cannot
                     be removed while in use.
+                  </p>
+                  <h3>Attendance evidence</h3>
+                  <label className="check-label">
+                    <Checkbox
+                      checked={
+                        settings.attendanceEvidence?.photoRequired || false
+                      }
+                      onCheckedChange={(value) =>
+                        setSettings((s) => ({
+                          ...s,
+                          attendanceEvidence: {
+                            photoRequired: value === true,
+                            locationRequired:
+                              s.attendanceEvidence?.locationRequired || false,
+                          },
+                        }))
+                      }
+                    />
+                    Require a photo at clock-in and clock-out
+                  </label>
+                  <label className="check-label">
+                    <Checkbox
+                      checked={
+                        settings.attendanceEvidence?.locationRequired || false
+                      }
+                      onCheckedChange={(value) =>
+                        setSettings((s) => ({
+                          ...s,
+                          attendanceEvidence: {
+                            locationRequired: value === true,
+                            photoRequired:
+                              s.attendanceEvidence?.photoRequired || false,
+                          },
+                        }))
+                      }
+                    />
+                    Require fresh location at clock-in and clock-out
+                  </label>
+                  <p>
+                    Photos are private attendance evidence. They do not prove
+                    identity. Workplace geofences still apply to clock-in.
                   </p>
                   <Label htmlFor="employment-statuses">
                     Employment statuses — name | access behaviour
@@ -735,7 +806,104 @@ export function SettingsPage() {
                 </p>
               )}
             </section>
+            {owner ? (
+              <AIManagement
+                settings={settings}
+                onChange={setSettings}
+                models={connection?.models || []}
+                busy={busy}
+                onSave={() =>
+                  save({ preventDefault: () => {} } as React.FormEvent)
+                }
+              />
+            ) : null}
           </TabsContent>
+          {owner ? (
+            <TabsContent value="notifications">
+              <section className="settings-section">
+                <h2>Scheduled HR digest</h2>
+                <p>
+                  Send owners, HR and managers a reminder with their own
+                  follow-up count. Details are loaded with current permissions
+                  when they open the workspace. No HR records are automatically
+                  sent to AI.
+                </p>
+                <label className="check-label">
+                  <Checkbox
+                    checked={settings.digest?.enabled || false}
+                    onCheckedChange={(value) =>
+                      setSettings((s) => ({
+                        ...s,
+                        digest: {
+                          enabled: value === true,
+                          frequency: s.digest?.frequency || "daily",
+                          hour: s.digest?.hour ?? 8,
+                        },
+                      }))
+                    }
+                  />
+                  Enable scheduled digest
+                </label>
+                <div className="record-form-grid">
+                  <div className="form-field">
+                    <Label>Frequency</Label>
+                    <NativeSelect
+                      label="Digest frequency"
+                      value={settings.digest?.frequency || "daily"}
+                      onChange={(value) =>
+                        setSettings((s) => ({
+                          ...s,
+                          digest: {
+                            enabled: s.digest?.enabled || false,
+                            hour: s.digest?.hour ?? 8,
+                            frequency: value as "daily" | "weekly",
+                          },
+                        }))
+                      }
+                      options={[
+                        { value: "daily", label: "Daily" },
+                        { value: "weekly", label: "Weekly — Monday" },
+                      ]}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <Label htmlFor="digest-hour">
+                      Delivery hour ({settings.timezone})
+                    </Label>
+                    <Input
+                      id="digest-hour"
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={settings.digest?.hour ?? 8}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          digest: {
+                            enabled: s.digest?.enabled || false,
+                            frequency: s.digest?.frequency || "daily",
+                            hour: Number(e.target.value),
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+                <p>
+                  Scheduled delivery requires background processing. Email
+                  delivery also requires a configured email service.
+                </p>
+                <Button
+                  onClick={() =>
+                    save({ preventDefault: () => {} } as React.FormEvent)
+                  }
+                  disabled={busy}
+                >
+                  Save digest schedule
+                </Button>
+              </section>
+            </TabsContent>
+          ) : null}
           {owner ? (
             <TabsContent value="setup">
               <SetupStatus />

@@ -61,8 +61,15 @@ try {
   browser = await playwright.launch({
     executablePath: process.env.CHROMIUM_PATH || playwright.executablePath(),
     args: process.env.CHROMIUM_PATH
-      ? chromium.args.filter((a) => a !== "--disable-web-security")
-      : [],
+      ? [
+          ...chromium.args.filter((a) => a !== "--disable-web-security"),
+          "--use-fake-device-for-media-stream",
+          "--use-fake-ui-for-media-stream",
+        ]
+      : [
+          "--use-fake-device-for-media-stream",
+          "--use-fake-ui-for-media-stream",
+        ],
     headless: true,
   });
   const context = await browser.newContext({
@@ -110,12 +117,42 @@ try {
     fullPage: true,
   });
   const nav = async (label) => {
+    const groups = {
+      People: ["People", "Employees"],
+      "Employee files": ["People", "Files & lifecycle"],
+      Leave: ["Time & leave", "Leave"],
+      "Attendance & shifts": ["Time & leave", "Attendance & shifts"],
+      "Team calendar": ["Time & leave", "Team calendar"],
+      Claims: ["Pay & claims", "Claims"],
+      "Payroll & payslips": ["Pay & claims", "Payroll & payslips"],
+      Payments: ["Pay & claims", "Payments"],
+      Recruitment: ["Hiring", "Recruitment"],
+      Assessments: ["Hiring", "Assessments"],
+      "Goals & evaluations": ["Performance", "Goals & evaluations"],
+      "Review cycles": ["Performance", "Review cycles"],
+      "Company handbook": ["Knowledge", "Company handbook"],
+      "Meeting notes": ["Knowledge", "Meeting notes"],
+    };
+    if (label === "HR policies") {
+      await page
+        .locator(".sidebar")
+        .getByRole("button", { name: "Settings", exact: true })
+        .click();
+      await page.getByRole("tab", { name: "HR policies", exact: true }).click();
+      return;
+    }
+    const [group, tab] = groups[label] || [label];
     await page
       .locator(".sidebar nav")
       .getByRole("button", {
-        name: new RegExp("^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+        name: new RegExp("^" + group.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
       })
       .click();
+    if (tab)
+      await page
+        .locator(".hub-tabs")
+        .getByRole("button", { name: tab, exact: true })
+        .click();
   };
   await nav("People");
   await page.getByRole("heading", { name: "People", exact: true }).waitFor();
@@ -141,6 +178,45 @@ try {
   await page.getByRole("button", { name: "Clock out", exact: true }).waitFor();
   await page.getByRole("button", { name: "Clock out", exact: true }).click();
   await page.getByRole("button", { name: "Clock in", exact: true }).waitFor();
+  await page.getByRole("button", { name: "With photo", exact: true }).click();
+  try {
+    await page
+      .getByRole("button", { name: "Capture and clock in", exact: true })
+      .click();
+  } catch (error) {
+    console.error(
+      "Camera diagnostics",
+      await page.getByRole("dialog").innerText(),
+      await page.locator("video").evaluate((v) => ({
+        readyState: v.readyState,
+        width: v.videoWidth,
+        tracks: v.srcObject
+          ?.getTracks()
+          .map((t) => ({ state: t.readyState, enabled: t.enabled })),
+      })),
+    );
+    throw error;
+  }
+
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "Clock out", exact: true }).waitFor();
+  await page.getByRole("button", { name: "With photo", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Capture and clock out", exact: true })
+    .click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const cameraRecords = (
+    await (await page.request.get(`${base}/api/workspace`)).json()
+  ).records;
+  assert(
+    cameraRecords.some(
+      (r) =>
+        r.kind === "attendance" &&
+        r.data.clockInEvidence?.photoId &&
+        r.data.clockOutEvidence?.photoId,
+    ),
+    "Camera flow must persist both private photos",
+  );
   await nav("Payroll & payslips");
   await page.getByRole("button", { name: "Prepare payroll" }).click();
   await page
@@ -564,6 +640,12 @@ try {
       return route.fulfill({ json: chatHistory });
     chatRequests++;
     const body = route.request().postDataJSON();
+    if (chatRequests === 1)
+      assert.equal(
+        body.fileIds.length,
+        1,
+        "Chat must send the reviewed attachment ID",
+      );
     const answer =
       "Here’s a clear starting point for your team.\n\n- Review pending leave requests.\n- Check dates against the team calendar.\n- Confirm any changes before saving.\n\n| Request | Status | Next step |\n| --- | --- | --- |\n| Annual leave | Pending | Review the dates |\n\nI can help you review a specific request next.";
     chatHistory.push(
@@ -594,6 +676,17 @@ try {
   assert(
     (await page.getByLabel("Message People AI").inputValue()).includes("leave"),
   );
+  await page.locator('.chat-composer input[type="file"]').setInputFiles({
+    name: "chat-notes.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Meeting follow-up: review requests."),
+  });
+  await page.getByRole("button", { name: /^chat-notes.txt/ }).click();
+  assert.equal(
+    await page.getByRole("dialog").locator("textarea").inputValue(),
+    "Meeting follow-up: review requests.",
+  );
+  await page.keyboard.press("Escape");
   await page.getByLabel("Message People AI").fill("Review my team requests");
   await page.getByLabel("Message People AI").press("Enter");
   assert.equal(chatRequests, 0, "Enter must add a newline without sending");
@@ -693,6 +786,7 @@ try {
   await nav("Team calendar");
   await page.getByLabel("Calendar month").fill("2027-02");
   await page.getByLabel("Calendar category").selectOption("time_off");
+  await page.getByRole("button", { name: /^2027-02-02/ }).click();
   await page
     .locator(".calendar-grid")
     .getByText("Aina Rahman · Time off", { exact: true })
@@ -1014,6 +1108,7 @@ try {
     .waitFor();
   await page.getByLabel("Calendar month").fill("2027-02");
   await page.getByLabel("Calendar category").selectOption("time_off");
+  await page.getByRole("button", { name: /^2027-02-02/ }).click();
   await page
     .locator(".calendar-agenda")
     .getByText("Aina Rahman · Time off", { exact: true })
@@ -1096,6 +1191,52 @@ try {
     path: "docs/screenshots/setup-mobile.png",
     fullPage: true,
   });
+  console.log("Checking mobile Settings exit without saving.");
+  let settingsWrites = 0;
+  const countSettings = (request) => {
+    if (
+      request.method() === "PATCH" &&
+      request.url().includes("/api/workspace")
+    )
+      settingsWrites++;
+  };
+  page.on("request", countSettings);
+  await page
+    .getByRole("button", { name: "Back to workspace", exact: true })
+    .click();
+  await page.getByRole("heading", { name: "Your workday, Amnan." }).waitFor();
+  await page
+    .getByRole("button", { name: "Open navigation", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page
+    .getByLabel("Company name", { exact: true })
+    .fill("Unsaved mobile edit");
+  await page
+    .getByRole("button", { name: "Back to workspace", exact: true })
+    .click();
+  await page.getByRole("heading", { name: "Your workday, Amnan." }).waitFor();
+  await page
+    .getByRole("button", { name: "Open navigation", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  assert.notEqual(
+    await page.getByLabel("Company name", { exact: true }).inputValue(),
+    "Unsaved mobile edit",
+  );
+  await page
+    .getByLabel("Company name", { exact: true })
+    .fill("Unsaved browser back");
+  await page.goBack();
+  await page.getByRole("heading", { name: "Your workday, Amnan." }).waitFor();
+  assert.equal(settingsWrites, 0, "Leaving Settings must not save");
+  page.off("request", countSettings);
   for (const view of ["approvals", "calendar", "my-profile"]) {
     await page.goto(`${base}/?view=${view}`);
     await page

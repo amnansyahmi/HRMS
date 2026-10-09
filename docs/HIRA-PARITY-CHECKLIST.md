@@ -44,3 +44,9 @@ Production checks on 9 October 2026 now pass for `/api/health`, demo login and w
 4. Review private HIRA workflows if exact screen-by-screen parity is required. Public information does not reveal proprietary internals or every integration.
 
 These are completion gates, not items silently counted as finished. Other Kuasa products (marketing, accounting and non-HR C-Suite agents) remain outside the user's HR-only scope.
+
+## Current workspace enhancement update
+
+Added six navigation hubs, contextual AI record review, private chat attachments, owner-controlled model routing and atomic monthly request budgets, safe token/time usage reporting, deterministic HR digests with deduplicated scheduled reminders, and read-only payroll discrepancy checks. Attendance adds private photo evidence and configurable location/photo requirements. Leave adds a simpler policy selector, balance preview and a tappable month/day calendar. Mobile Settings can close through its back arrow or browser history without saving.
+
+The new `ai_usage` migration extends the schema to 20 tables after deployment. These changes do not complete the open official-form, realtime-provider or live-service verification gates above. Scheduled digest code requires a configured scheduler; it does not establish that production scheduling is active.

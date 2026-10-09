@@ -80,6 +80,14 @@ export interface Company {
       import("./workflow-config").Specialist,
       { enabled: boolean; tools: string[] }
     >;
+    aiRouting?: {
+      generalModel: string;
+      analysisModel: string;
+      visionModel: string;
+      monthlyRequestLimit: number;
+    };
+    attendanceEvidence?: { photoRequired: boolean; locationRequired: boolean };
+    digest?: { enabled: boolean; frequency: "daily" | "weekly"; hour: number };
     aiEnabled: boolean;
     aiActionsEnabled: boolean;
     aiAgents: {

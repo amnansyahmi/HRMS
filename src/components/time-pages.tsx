@@ -3,6 +3,8 @@ import { sameClaimPeriod } from "@/lib/claim-period";
 import { reviewOptions, approvalStage } from "@/lib/request-workflow";
 import { leaveEntitlement } from "@/lib/leave-entitlement";
 import { toast } from "sonner";
+import { AttendanceCamera } from "./attendance-camera";
+import { CalendarPage } from "./calendar-page";
 import { ShiftRoster } from "./shift-roster";
 import { useState } from "react";
 import {
@@ -15,6 +17,7 @@ import {
   LogIn,
   LogOut,
   CalendarDays,
+  Camera,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -47,6 +50,7 @@ export function AttendancePage() {
     [search, setSearch] = useState(""),
     [location, setLocation] = useState("Office"),
     [locationId, setLocationId] = useState(""),
+    [camera, setCamera] = useState(false),
     [busy, setBusy] = useState(false),
     staff = isStaff(workspace.actor),
     employees = workspace.records.filter((r) => r.kind === "employee"),
@@ -77,18 +81,20 @@ export function AttendancePage() {
           minute: "2-digit",
         }).format(new Date(String(value)))
       : "—";
-  async function clock() {
+  async function clock(photo?: { photoId: string; capturedAt: string }) {
     setBusy(true);
     try {
-      await act(
+      return await act(
         "clock",
         {
+          ...photo,
           action: open ? "out" : "in",
           location,
           locationId: locationId || null,
           coordinates:
-            !open &&
-            workspace.records.find((r) => r.id === locationId)?.data.geofence
+            workspace.company.settings.attendanceEvidence?.locationRequired ||
+            (!open &&
+              workspace.records.find((r) => r.id === locationId)?.data.geofence)
               ? await new Promise<{
                   latitude: number;
                   longitude: number;
@@ -166,10 +172,27 @@ export function AttendancePage() {
                 }))}
               />
             ) : null}
-            <Button disabled={busy} onClick={clock}>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                workspace.company.settings.attendanceEvidence?.photoRequired
+                  ? setCamera(true)
+                  : void clock()
+              }
+            >
               {open ? <LogOut size={16} /> : <LogIn size={16} />}Clock{" "}
               {open ? "out" : "in"}
             </Button>
+            {!workspace.company.settings.attendanceEvidence?.photoRequired ? (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => setCamera(true)}
+              >
+                <Camera size={16} />
+                With photo
+              </Button>
+            ) : null}
           </div>
         </section>
       ) : (
@@ -178,6 +201,13 @@ export function AttendancePage() {
           self-service requests.
         </div>
       )}
+      {camera ? (
+        <AttendanceCamera
+          action={open ? "out" : "in"}
+          onClose={() => setCamera(false)}
+          onConfirm={clock}
+        />
+      ) : null}
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="attendance">Attendance</TabsTrigger>
@@ -232,7 +262,30 @@ export function AttendancePage() {
                             ).toFixed(1)
                           : "In progress"}
                       </td>
-                      <td>{String(r.data.location)}</td>
+                      <td>
+                        {String(r.data.location)}
+                        <div className="attendance-evidence-links">
+                          {(
+                            ["clockInEvidence", "clockOutEvidence"] as const
+                          ).map((key) => {
+                            const evidence = r.data[key] as
+                              { photoId?: string } | undefined;
+                            return evidence?.photoId ? (
+                              <a
+                                key={key}
+                                href={`/api/files/${evidence.photoId}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                <Camera size={13} />
+                                {key === "clockInEvidence"
+                                  ? "In photo"
+                                  : "Out photo"}
+                              </a>
+                            ) : null;
+                          })}
+                        </div>
+                      </td>
                       <td>
                         <Status
                           value={
@@ -452,6 +505,11 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
             );
           })}
         </div>
+      ) : null}
+      {kind === "leave" ? (
+        <section className="panel leave-calendar">
+          <CalendarPage compact />
+        </section>
       ) : null}
       {kind === "claim" && own ? (
         <div className="leave-balances">
