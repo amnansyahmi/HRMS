@@ -2,6 +2,9 @@
 import { createContext, useContext } from "react";
 import type { Workspace, Kind, HRRecord } from "@/lib/types";
 export type Page =
+  | "approvals"
+  | "calendar"
+  | "my-profile"
   | "overview"
   | "people"
   | "attendance"

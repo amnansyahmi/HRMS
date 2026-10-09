@@ -1,4 +1,8 @@
 import { resubmitClaim } from "@/lib/claims";
+import {
+  submitProfileChange,
+  reviewProfileChange,
+} from "@/lib/profile-changes";
 import { getActor, assertOrigin } from "@/lib/auth";
 import {
   clock,
@@ -27,6 +31,10 @@ export async function POST(
       { action } = await params;
     if (action === "claim-resubmit")
       return Response.json(await resubmitClaim(actor, body));
+    if (action === "profile-request")
+      return Response.json(await submitProfileChange(actor, body));
+    if (action === "profile-review")
+      return Response.json(await reviewProfileChange(actor, body));
     if (action === "receipt-ocr")
       return Response.json(await ocrReceipt(actor, body));
     if (action === "meeting-transcribe")

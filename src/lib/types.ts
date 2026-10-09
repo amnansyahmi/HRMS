@@ -1,4 +1,5 @@
 export const kinds = [
+  "profile_change",
   "employee",
   "designation",
   "payroll_run",

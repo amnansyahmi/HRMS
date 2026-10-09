@@ -32,12 +32,14 @@ export async function notify(
   body: string,
   href: string,
   employeeId?: string,
-  reviewers = false,
+  reviewers: boolean | "hr" = false,
 ) {
   const members = (
     await tx.query<{ user_id: string; email: string }>(
-      `SELECT m.user_id,u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 AND ${reviewers ? "(m.role IN ('owner','hr') OR (m.role='manager' AND m.employee_id=(SELECT (data->>'managerId')::uuid FROM hr_records WHERE company_id=$1 AND id=$2)))" : "m.employee_id=$2"}`,
-      [actor.companyId, employeeId || null],
+      `SELECT m.user_id,u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 AND ${reviewers === "hr" ? "m.role IN ('owner','hr')" : reviewers ? "(m.role IN ('owner','hr') OR (m.role='manager' AND m.employee_id=(SELECT (data->>'managerId')::uuid FROM hr_records WHERE company_id=$1 AND id=$2)))" : "m.employee_id=$2"}`,
+      reviewers === "hr"
+        ? [actor.companyId]
+        : [actor.companyId, employeeId || null],
     )
   ).rows;
   for (const member of members) {

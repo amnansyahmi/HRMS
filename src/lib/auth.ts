@@ -1,3 +1,4 @@
+import { appUrlIssue } from "./deployment-config";
 import {
   randomBytes,
   randomUUID,
@@ -40,10 +41,14 @@ export async function verifyPassword(password: string, hash: string) {
 }
 export function assertOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  if (process.env.NODE_ENV === "production" && !process.env.APP_URL)
-    fail("Configure APP_URL before using this deployment", 503);
+  const issue = appUrlIssue();
+  if (issue) fail(issue, 503);
   const allowed = new URL(process.env.APP_URL || request.url).origin;
-  if (origin !== allowed) fail("Request origin is not allowed", 403);
+  if (origin !== allowed)
+    fail(
+      "This site address does not match APP_URL. Open the configured address or ask the administrator to update APP_URL and redeploy.",
+      403,
+    );
 }
 export async function rateLimit(key: string, limit: number, seconds: number) {
   const result = await db.query<{ count: number }>(

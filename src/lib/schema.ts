@@ -31,6 +31,16 @@ const question = z
   );
 export const schemas = {
   ...extendedSchemas,
+  profile_change: z.object({
+    changes: z.record(z.string(), z.string()),
+    previous: z.record(z.string(), z.string()),
+    reason: z.string().trim().min(1).max(1000),
+    status: z.enum(["Pending", "Approved", "Rejected", "Cancelled"]),
+    submittedBy: z.uuid(),
+    reviewedBy: optionalId,
+    reviewNote: z.string().max(1000).default(""),
+    reviewedAt: z.iso.datetime().nullable().default(null),
+  }),
   designation: z.object({ name: text, description: long }),
   payroll_run: z.object({
     title: text,

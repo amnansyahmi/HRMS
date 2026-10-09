@@ -18,6 +18,8 @@ export function canRead(
   departmentId?: unknown,
 ) {
   if (record.company_id !== actor.companyId) return false;
+  if (record.kind === "profile_change")
+    return isStaff(actor) || record.employee_id === actor.employeeId;
   if (record.kind === "meeting")
     return (
       actor.role === "owner" ||
@@ -172,6 +174,7 @@ export function canCreate(actor: Actor, kind: Kind, employeeId: string | null) {
       "assessment_result",
       "job_history",
       "payment_voucher",
+      "profile_change",
     ].includes(kind)
   )
     return false;

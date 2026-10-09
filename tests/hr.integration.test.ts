@@ -2331,3 +2331,554 @@ describe("final scheduled payday", () => {
     ).toBe("Reconciled");
   });
 });
+
+import {
+  submitProfileChange,
+  reviewProfileChange,
+} from "@/lib/profile-changes";
+import { reviewOptions, approvalStage } from "@/lib/request-workflow";
+import { calendarEvents, calendarEmployees } from "@/lib/hr-calendar";
+import { exportCalendar } from "@/lib/calendar-export";
+import { appUrlIssue, deploymentChecks } from "@/lib/deployment-config";
+import { GET as exportGet } from "@/app/api/export/route";
+import { GET as setupGet } from "@/app/api/setup/route";
+
+describe("contact update requests", () => {
+  it("applies only reviewed contact changes and preserves employment fields", async () => {
+    const e = await freshEmployee({ phone: "0120000000" });
+    const request = await submitProfileChange(asEmployee(e), {
+      employeeUpdatedAt: e.updated_at,
+      changes: { phone: "0131234567", address: "New address" },
+      reason: "Moved house",
+    });
+    expect((await recordById(owner, e.id)).data.phone).toBe("0120000000");
+    expect(request.data.previous).toMatchObject({ phone: "0120000000" });
+    await expect(
+      reviewProfileChange(asEmployee(e), {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      reviewProfileChange(managerActor(), {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await reviewProfileChange(owner, {
+      id: request.id,
+      expectedUpdatedAt: request.updated_at,
+      decision: "Approved",
+      note: "Confirmed with employee",
+    });
+    const updated = await recordById(owner, e.id);
+    expect(updated.data).toMatchObject({
+      phone: "0131234567",
+      address: "New address",
+      salary: e.data.salary,
+      email: e.data.email,
+      status: e.data.status,
+    });
+    await expect(
+      reviewProfileChange(owner, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+  it("rejects unsupported fields, stale submissions and concurrent pending changes", async () => {
+    const e = await freshEmployee();
+    for (const changes of [
+      { salary: "1" },
+      { bankAccount: "123" },
+      { email: "changed@test.invalid" },
+      { managerId: owner.userId },
+    ])
+      await expect(
+        submitProfileChange(asEmployee(e), {
+          employeeUpdatedAt: e.updated_at,
+          changes,
+          reason: "Changed",
+        }),
+      ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: "old",
+        changes: { phone: "123" },
+        reason: "Changed",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: e.updated_at,
+        changes: { phone: "" },
+        reason: "No change",
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    const payload = {
+      employeeUpdatedAt: e.updated_at,
+      changes: { phone: "123" },
+      reason: "New phone",
+    };
+    const request = await submitProfileChange(asEmployee(e), payload);
+    await expect(
+      submitProfileChange(asEmployee(e), payload),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      updateRecord(owner, "profile_change", request.id, {
+        updatedAt: request.updated_at,
+        data: { status: "Approved" },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      createRecord(owner, "profile_change", {
+        employeeId: e.id,
+        data: request.data,
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+  it("does not overwrite contact fields that HR changed after submission", async () => {
+    const e = await freshEmployee(),
+      request = await submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: e.updated_at,
+        changes: { phone: "456" },
+        reason: "New phone",
+      });
+    await updateRecord(owner, "employee", e.id, {
+      updatedAt: e.updated_at,
+      data: { phone: "HR update" },
+    });
+    await expect(
+      reviewProfileChange(owner, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect((await recordById(owner, e.id)).data.phone).toBe("HR update");
+  });
+  it("allows unrelated HR changes and merges without losing them", async () => {
+    const e = await freshEmployee(),
+      request = await submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: e.updated_at,
+        changes: { address: "New home" },
+        reason: "Moved",
+      });
+    await updateRecord(owner, "employee", e.id, {
+      updatedAt: e.updated_at,
+      data: { title: "Senior Engineer" },
+    });
+    await reviewProfileChange(owner, {
+      id: request.id,
+      expectedUpdatedAt: request.updated_at,
+      decision: "Approved",
+    });
+    expect((await recordById(owner, e.id)).data).toMatchObject({
+      address: "New home",
+      title: "Senior Engineer",
+    });
+  });
+  it("keeps proposed details private from managers, colleagues and other tenants", async () => {
+    const e = await freshEmployee(),
+      request = await submitProfileChange(asEmployee(e), {
+        employeeUpdatedAt: e.updated_at,
+        changes: { address: "Private home" },
+        reason: "Moved",
+      });
+    expect(
+      (await visibleRecords(managerActor())).some((r) => r.id === request.id),
+    ).toBe(false);
+    expect(
+      (await visibleRecords(employeeActor())).some((r) => r.id === request.id),
+    ).toBe(false);
+    expect(
+      (await visibleRecords(asEmployee(e))).some((r) => r.id === request.id),
+    ).toBe(true);
+    await expect(
+      reviewProfileChange(other, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Approved",
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+  it("supports reasoned rejection, own cancellation and resubmission as a new request", async () => {
+    const e = await freshEmployee(),
+      payload = {
+        employeeUpdatedAt: e.updated_at,
+        changes: { phone: "789" },
+        reason: "Changed",
+      };
+    const request = await submitProfileChange(asEmployee(e), payload);
+    await expect(
+      reviewProfileChange(owner, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Rejected",
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      reviewProfileChange(owner, {
+        id: request.id,
+        expectedUpdatedAt: request.updated_at,
+        decision: "Cancelled",
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await reviewProfileChange(asEmployee(e), {
+      id: request.id,
+      expectedUpdatedAt: request.updated_at,
+      decision: "Cancelled",
+    });
+    const second = await submitProfileChange(asEmployee(e), payload);
+    await reviewProfileChange(owner, {
+      id: second.id,
+      expectedUpdatedAt: second.updated_at,
+      decision: "Rejected",
+      note: "Please confirm the number",
+    });
+    expect((await recordById(owner, e.id)).data.phone).toBe(e.data.phone);
+    expect((await recordById(owner, second.id)).data.reviewNote).toBe(
+      "Please confirm the number",
+    );
+  });
+});
+
+describe("approval inbox permissions", () => {
+  it("shows the manager and HR stages while withholding self approval", async () => {
+    const e = await freshEmployee(),
+      policy = await createRecord(owner, "claim_type", {
+        data: {
+          name: "Staged inbox",
+          limit: 100,
+          period: "Per request",
+          receiptRequired: false,
+          approval: "Manager then HR",
+        },
+      });
+    const claim = await createRecord(asEmployee(e), "claim", {
+      data: expense("2026-09-15", { claimTypeId: policy.id }),
+    });
+    let records = await visibleRecords(owner);
+    expect(approvalStage(claim, records)).toBe("Awaiting manager");
+    expect(reviewOptions(owner, claim, records)).not.toContain("Approved");
+    expect(reviewOptions(managerActor(), claim, records)).toContain("Approved");
+    expect(reviewOptions(asEmployee(e), claim, records)).toEqual(["Cancelled"]);
+    await reviewRequest(managerActor(), {
+      id: claim.id,
+      decision: "Approved",
+      expectedUpdatedAt: claim.updated_at,
+    });
+    const updated = await recordById(owner, claim.id);
+    records = await visibleRecords(owner);
+    expect(approvalStage(updated, records)).toBe("Awaiting HR");
+    expect(reviewOptions(managerActor(), updated, records)).not.toContain(
+      "Approved",
+    );
+    expect(reviewOptions(owner, updated, records)).toContain("Approved");
+    await expect(
+      reviewRequest(owner, {
+        id: claim.id,
+        decision: "Approved",
+        expectedUpdatedAt: claim.updated_at,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+  it("keeps HR-only approvals and linked claim payments out of unsupported controls", async () => {
+    const e = await freshEmployee(),
+      policy = await createRecord(owner, "claim_type", {
+        data: {
+          name: "HR-only inbox",
+          limit: 100,
+          period: "Per request",
+          receiptRequired: false,
+          approval: "HR only",
+        },
+      });
+    const claim = await createRecord(asEmployee(e), "claim", {
+        data: expense("2026-09-15", { claimTypeId: policy.id }),
+      }),
+      records = await visibleRecords(owner);
+    expect(reviewOptions(managerActor(), claim, records)).not.toContain(
+      "Approved",
+    );
+    expect(
+      reviewOptions(
+        owner,
+        {
+          ...claim,
+          data: { ...claim.data, status: "Approved", voucherId: randomUUID() },
+        },
+        records,
+      ),
+    ).not.toContain("Paid");
+    expect(reviewOptions(other, claim, records)).toEqual([]);
+  });
+});
+
+describe("scoped calendar and downloads", () => {
+  it("limits employees to themselves and managers to direct reports", async () => {
+    const records = await visibleRecords(owner);
+    expect(
+      calendarEmployees(employeeActor(), records).map((e) => e.id),
+    ).toEqual([employee.id]);
+    const team = calendarEmployees(managerActor(), records);
+    expect(team.some((e) => e.id === colleague.id)).toBe(false);
+    expect(
+      team.every(
+        (e) =>
+          e.id === managerEmployee.id ||
+          e.data.managerId === managerEmployee.id,
+      ),
+    ).toBe(true);
+  });
+  it("omits request reasons, medical types and pending events from exports", async () => {
+    const e = await freshEmployee(),
+      company = await getCompany(owner);
+    const request = await createRecord(asEmployee(e), "leave", {
+      data: {
+        ...leaveData("2026-11-02"),
+        type: "Sick",
+        reason: "Private diagnosis",
+      },
+    });
+    const records = await visibleRecords(owner),
+      pending = calendarEvents(
+        asEmployee(e),
+        company,
+        records,
+        "2026-11-01",
+        "2026-11-05",
+        "mine",
+        true,
+      );
+    expect(pending.some((ev) => ev.recordId === request.id)).toBe(true);
+    expect(exportCalendar(pending, company.settings.timezone)).not.toContain(
+      request.id,
+    );
+    await reviewRequest(owner, { id: request.id, decision: "Approved" });
+    const approved = calendarEvents(
+      asEmployee(e),
+      company,
+      await visibleRecords(owner),
+      "2026-11-01",
+      "2026-11-05",
+      "mine",
+    );
+    const ics = exportCalendar(approved, company.settings.timezone);
+    expect(ics).toContain("Away");
+    expect(ics).not.toContain("Private diagnosis");
+    expect(ics).not.toContain("Sick");
+    expect(ics).toContain("DTSTART;VALUE=DATE:20261102");
+    expect(ics).toContain("DTEND;VALUE=DATE:20261103");
+  });
+  it("exports rotating overnight shifts in UTC and honors the same filters", async () => {
+    const e = await freshEmployee(),
+      company = await getCompany(owner);
+    const shift = await createRecord(owner, "shift", {
+      data: {
+        name: "Night",
+        start: "22:00",
+        end: "06:00",
+        days: [1, 2, 3, 4, 5],
+        employeeIds: [e.id],
+        anchorDate: "2026-11-02",
+        rotationWeeks: 2,
+        activeWeeks: [1],
+      },
+    });
+    const records = await visibleRecords(owner);
+    const events = calendarEvents(
+      asEmployee(e),
+      company,
+      records,
+      "2026-11-02",
+      "2026-11-09",
+      "mine",
+    );
+    expect(
+      events.some((ev) => ev.recordId === shift.id && ev.date === "2026-11-09"),
+    ).toBe(false);
+    const ics = exportCalendar(events, "Asia/Kuala_Lumpur");
+    expect(ics).toContain("DTSTART:20261102T140000Z");
+    expect(ics).toContain("DTEND:20261102T220000Z");
+    expect(
+      calendarEvents(
+        asEmployee(e),
+        company,
+        records,
+        "2026-11-02",
+        "2026-11-02",
+        "team",
+      ).every((ev) => !ev.employeeId || ev.employeeId === e.id),
+    ).toBe(true);
+  });
+  it("handles 24:00, escapes injection text and folds UTF-8 safely", () => {
+    const events = [
+      {
+        id: "test",
+        recordId: null,
+        employeeId: null,
+        date: "2026-11-02",
+        title: "漢".repeat(50) + "\nBEGIN:VEVENT;bad,slash\\",
+        kind: "time_off" as const,
+        status: "Approved",
+        start: "23:00",
+        end: "24:00",
+        overnight: false,
+      },
+    ];
+    const ics = exportCalendar(events, "Asia/Kuala_Lumpur");
+    expect(ics).toContain("DTEND:20261102T160000Z");
+    expect(ics.match(/\r\nBEGIN:VEVENT/g)).toHaveLength(1);
+    expect(
+      ics.split("\r\n").every((line) => Buffer.byteLength(line) <= 75),
+    ).toBe(true);
+    expect(ics).not.toContain("�");
+    expect(() =>
+      exportCalendar(
+        [{ ...events[0], date: "2026-03-08", start: "02:30", end: "03:30" }],
+        "America/New_York",
+      ),
+    ).toThrow("does not exist");
+  });
+  it("rejects oversized ranges and exports only authorized calendar records", async () => {
+    await createSession(employeeUserId, owner.companyId);
+    const response = await exportGet(
+      new Request(
+        "http://localhost:3000/api/export?type=calendar&start=2026-11-01&end=2026-11-30&scope=team",
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    const text = await response.text();
+    expect(text).not.toContain(String(colleague.data.name));
+    expect(
+      (
+        await exportGet(
+          new Request(
+            "http://localhost:3000/api/export?type=calendar&start=2026-01-01&end=2026-12-31",
+          ),
+        )
+      ).status,
+    ).toBe(400);
+    const company = await getCompany(owner);
+    expect(() =>
+      calendarEvents(owner, company, [], "2026-01-01", "2026-12-31"),
+    ).toThrow("1–62 days");
+    await createSession(owner.userId, owner.companyId);
+  });
+});
+
+describe("deployment diagnostics and notification reading", () => {
+  it("validates canonical URLs without disclosing their contents", () => {
+    expect(appUrlIssue({ NODE_ENV: "production" })).toContain("APP_URL");
+    for (const url of [
+      "not a url",
+      "http://example.test",
+      "https://user:secret@example.test",
+      "https://example.test/path",
+      "https://example.test/?secret=abc",
+    ])
+      expect(
+        appUrlIssue({ NODE_ENV: "production", APP_URL: url }),
+      ).toBeTruthy();
+    expect(
+      appUrlIssue({ NODE_ENV: "production", APP_URL: "https://example.test" }),
+    ).toBeNull();
+    expect(
+      appUrlIssue({
+        NODE_ENV: "development",
+        APP_URL: "http://localhost:3000",
+      }),
+    ).toBeNull();
+    const checks = JSON.stringify(
+      deploymentChecks({
+        DATABASE_URL: "private-db-url",
+        AI_NONYMAUZ_API_KEY: "private-token",
+        APP_URL: "https://private-domain.test",
+      }),
+    );
+    expect(checks).not.toContain("private-db-url");
+    expect(checks).not.toContain("private-token");
+    expect(checks).not.toContain("private-domain");
+  });
+  it("restricts setup checks to owners", async () => {
+    await createSession(employeeUserId, owner.companyId);
+    expect((await setupGet()).status).toBe(403);
+    await createSession(owner.userId, owner.companyId);
+    const response = await setupGet();
+    expect(response.status).toBe(200);
+    expect((await response.json()).databaseConnected).toBe(true);
+  });
+  it("marks only the requested user/company notification as read", async () => {
+    const id = randomUUID(),
+      second = randomUUID();
+    for (const notificationId of [id, second])
+      await db.query(
+        "INSERT INTO notifications(id,company_id,user_id,title,body,href) VALUES($1,$2,$3,'Test','Update','/?view=approvals')",
+        [notificationId, owner.companyId, owner.userId],
+      );
+    await expect(
+      operation(employeeActor(), "notification-read", { id }),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      operation(other, "notification-read", { id }),
+    ).rejects.toMatchObject({ status: 404 });
+    await operation(owner, "notification-read", { id });
+    await operation(owner, "notification-read", { id });
+    const rows = (
+      await db.query<{ id: string; read_at: string | null }>(
+        "SELECT id,read_at FROM notifications WHERE id=ANY($1::uuid[])",
+        [[id, second]],
+      )
+    ).rows;
+    expect(rows.find((r) => r.id === id)?.read_at).toBeTruthy();
+    expect(rows.find((r) => r.id === second)?.read_at).toBeNull();
+  });
+});
+
+describe("multi-run annual preparation worksheets", () => {
+  it("counts distinct published months separately from runs and includes commissions", async () => {
+    const e = await freshEmployee({ name: "Worksheet multi-run person" });
+    for (const day of ["01", "15"]) {
+      const run = await generatePayroll(owner, {
+        cycle: "Off-cycle",
+        startDate: `2026-03-${day}`,
+        endDate: `2026-03-${day}`,
+        payDate: `2026-03-${day}`,
+        employeeId: e.id,
+        title: `Worksheet bonus ${day}`,
+      });
+      const draft = (await visibleRecords(owner)).find(
+        (r) => r.kind === "payroll" && r.data.runId === run.runId,
+      )!;
+      await updateRecord(owner, "payroll", draft.id, {
+        updatedAt: draft.updated_at,
+        data: { bonus: 100, commission: 50, reviewed: true },
+      });
+      await publishPayroll(owner, { runId: run.runId! });
+    }
+    await createSession(owner.userId, owner.companyId);
+    const response = await exportGet(
+      new Request("http://localhost:3000/api/export?type=EA&year=2026"),
+    );
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const lines = text.split("\r\n"),
+      header = lines.find((l) =>
+        l.startsWith('"Employee","Email","Published months"'),
+      )!;
+    expect(header).toContain('"Published runs"');
+    expect(header).toContain('"commission (MYR)"');
+    const row = lines
+      .find((l) => l.startsWith('"Worksheet multi-run person"'))!
+      .split(",");
+    expect(row[2]).toBe('"1"');
+    expect(row[3]).toBe('"2"');
+    expect(row[header.split(",").indexOf('"commission (MYR)"')]).toBe('"100"');
+    expect(text).not.toContain('"NaN"');
+  });
+});

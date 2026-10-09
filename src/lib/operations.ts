@@ -60,6 +60,14 @@ export async function operation(
     );
     return { ok: true };
   }
+  if (action === "notification-read") {
+    const result = await db.query(
+      "UPDATE notifications SET read_at=coalesce(read_at,now()) WHERE id=$1 AND company_id=$2 AND user_id=$3 RETURNING id",
+      [z.uuid().parse(body.id), actor.companyId, actor.userId],
+    );
+    if (!result.rows.length) fail("Notification unavailable", 404);
+    return { ok: true };
+  }
   if (action === "operations-status") {
     staff(actor);
     return normalize({
