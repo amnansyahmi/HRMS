@@ -68,7 +68,7 @@ export async function selectedPolicy(
     fail("This policy requires an attachment");
   return policy;
 }
-function portion(data: Data) {
+export function leavePortion(data: Data) {
   return data.unit === "Morning"
     ? [9 / 24, 13 / 24]
     : data.unit === "Afternoon"
@@ -122,7 +122,7 @@ export async function leaveDays(
       [actor.companyId, employee.id, excludeId],
     )
   ).rows;
-  const interval = portion(data);
+  const interval = leavePortion(data);
   if (
     leaves.some(
       (l) =>
@@ -130,8 +130,8 @@ export async function leaveDays(
         String(l.data.endDate) >= start &&
         (start !== end ||
           l.data.startDate !== l.data.endDate ||
-          Math.max(interval[0], portion(l.data)[0]) <
-            Math.min(interval[1], portion(l.data)[1])),
+          Math.max(interval[0], leavePortion(l.data)[0]) <
+            Math.min(interval[1], leavePortion(l.data)[1])),
     )
   )
     fail("This request overlaps existing leave", 409);
@@ -238,7 +238,7 @@ export async function checkTimeOff(
       if (r.kind === "time_off" && r.data.date !== data.date) return false;
       const bounds =
         r.kind === "leave"
-          ? portion(r.data)
+          ? leavePortion(r.data)
           : [minutes(r.data.start), minutes(r.data.end)];
       return (
         Math.max(interval[0], bounds[0]) < Math.min(interval[1], bounds[1])

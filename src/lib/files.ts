@@ -125,6 +125,12 @@ export async function downloadFile(actor: Actor, id: string) {
           r.data.fileId,
           r.data.evidenceId,
           ...((r.data.audioIds as string[]) || []),
+          ...(r.kind === "claim"
+            ? (
+                (r.data.history as { snapshot?: { receiptId?: string } }[]) ||
+                []
+              ).map((event) => event.snapshot?.receiptId)
+            : []),
         ].includes(id),
       )
     )

@@ -1,3 +1,4 @@
+import { hasPayroll } from "./workflow-config";
 import { parseCalendar } from "./calendar";
 import { localDate } from "./calculations";
 import { randomUUID } from "node:crypto";
@@ -433,6 +434,8 @@ export async function operation(
           departmentId: job.data.departmentId,
           startDate: body.data.startDate,
           status: "Onboarding",
+          employmentType:
+            body.data.employmentType || job.data.employmentType || "Full-time",
           salary: body.data.salary || 0,
         }),
       );
@@ -556,7 +559,8 @@ export async function operation(
       return { score };
     }
     if (action === "voucher-prepare") {
-      staff(actor);
+      if (!hasPayroll(actor, "pay"))
+        fail("Payroll payment permission required", 403);
       const ids = z
         .array(z.uuid())
         .min(1)
@@ -602,7 +606,8 @@ export async function operation(
       return voucher;
     }
     if (action === "voucher-pay") {
-      staff(actor);
+      if (!hasPayroll(actor, "pay"))
+        fail("Payroll payment permission required", 403);
       if (
         record.kind !== "payment_voucher" ||
         record.data.status !== "Prepared"

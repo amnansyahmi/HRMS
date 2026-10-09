@@ -299,6 +299,7 @@ export function calculateStatutory(
       taxableAdditional: additional,
       taxableTotal: normal + additional,
       epfWages,
+      epfNormalWages: epfNormal,
       socsoWages,
       pcb,
       calculatedAt: new Date().toISOString(),

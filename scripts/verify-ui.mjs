@@ -28,6 +28,7 @@ const server = spawn(
       DEMO_MODE: "true",
       HRMS_DATA_DIR: directory,
       NEXT_TELEMETRY_DISABLED: "1",
+      UI_VERIFICATION: "true",
     },
     stdio: ["ignore", "pipe", "pipe"],
   },
@@ -239,13 +240,11 @@ try {
     const block = onboardingPage
       .locator(".checklist .row-between")
       .filter({ hasText: type });
-    await block
-      .locator('input[type="file"]')
-      .setInputFiles({
-        name: type + ".txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from("Fabricated " + type + " for browser verification"),
-      });
+    await block.locator('input[type="file"]').setInputFiles({
+      name: type + ".txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Fabricated " + type + " for browser verification"),
+    });
     await block.getByText(type + ".txt", { exact: true }).waitFor();
   }
   await onboardingPage
@@ -271,6 +270,182 @@ try {
     path: "docs/screenshots/employee-files-desktop.png",
     fullPage: true,
   });
+  console.log("Checking equipment, claim correction, and dated pay runs.");
+  await page.getByRole("button", { name: "Equipment", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Add equipment", exact: true })
+    .click();
+  await page
+    .getByLabel("Employee", { exact: true })
+    .selectOption({ label: "UI Test Person" });
+  await page.getByLabel("Equipment", { exact: true }).fill("Browser laptop");
+  await page.getByLabel("Serial number", { exact: false }).fill("BROWSER-001");
+  await page.getByLabel("Issued on", { exact: false }).fill("2026-10-08");
+  await page.getByRole("button", { name: "Add record", exact: true }).click();
+  const assetCard = page
+    .locator(".record-card")
+    .filter({ hasText: "Browser laptop" });
+  await assetCard.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Returned on", { exact: false }).fill("2026-10-09");
+  await page.getByLabel("Condition", { exact: true }).selectOption("Returned");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const equipmentWorkspace = await (
+    await page.request.get(`${base}/api/workspace`)
+  ).json();
+  assert.equal(
+    equipmentWorkspace.records.find(
+      (r) => r.kind === "asset" && r.data.serial === "BROWSER-001",
+    ).data.returnedDate,
+    "2026-10-09",
+  );
+  const aina = equipmentWorkspace.records.find(
+    (r) => r.kind === "employee" && r.data.name === "Aina Rahman",
+  );
+  const correctionResponse = await page.request.post(
+    `${base}/api/records/claim`,
+    {
+      headers: { Origin: base },
+      data: {
+        employeeId: aina.id,
+        data: {
+          category: "Travel",
+          date: "2026-10-08",
+          amount: 45,
+          description: "Correction browser check",
+        },
+      },
+    },
+  );
+  assert(correctionResponse.ok(), await correctionResponse.text());
+  const correctionClaim = await correctionResponse.json();
+  await nav("Claims");
+  await page.reload();
+  const correctionRow = page
+    .locator("tbody tr")
+    .filter({ hasText: "Correction browser check" });
+  await correctionRow
+    .getByRole("button", { name: "Return for correction", exact: true })
+    .click();
+  assert(
+    await page
+      .getByRole("button", { name: "Confirm", exact: true })
+      .isDisabled(),
+  );
+  await page.getByLabel("Review note").fill("Correct receipt amount");
+  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await nav("Payroll & payslips");
+  await page.getByLabel("Pay cycle", { exact: true }).selectOption("Weekly");
+  await page.getByLabel("Run Starts").fill("2027-01-01");
+  await page.getByLabel("Run Ends").fill("2027-01-07");
+  await page.getByLabel("Run Pay date").fill("2027-01-08");
+  await page
+    .getByLabel("Payroll scope")
+    .selectOption({ label: "UI Test Person" });
+  await page
+    .getByRole("button", { name: "Prepare payroll", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Review", exact: true }).waitFor();
+  assert.equal(await page.locator("tbody tr").count(), 1);
+  assert.equal(await page.getByLabel("Payroll period").inputValue(), "2027-01");
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await page
+    .getByRole("checkbox", {
+      name: "I have checked the earnings and all statutory deductions for this employee",
+    })
+    .check();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page
+    .getByRole("button", { name: "Publish payslips", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Publish 1 payslips", exact: true })
+    .click();
+  await page.getByRole("link", { name: "Payslip", exact: true }).waitFor();
+  await page.screenshot({
+    path: "docs/screenshots/weekly-payroll-desktop.png",
+    fullPage: true,
+  });
+  await page
+    .locator(".sidebar-bottom")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  await page
+    .getByRole("heading", { name: "HR specialist permissions" })
+    .waitFor();
+  assert.equal(
+    await page
+      .locator(".settings-panel")
+      .filter({ hasText: "HR specialist permissions" })
+      .locator(".record-card")
+      .count(),
+    7,
+  );
+  await page
+    .getByLabel("Minutes before shift for reminders (0 disables)")
+    .fill("20");
+  const statuses = page.getByLabel(
+    "Employment statuses — name | access behaviour",
+  );
+  await statuses.fill((await statuses.inputValue()) + "\nConsultant|Active");
+  const types = page.getByLabel("Employee types — one per line");
+  await types.fill((await types.inputValue()) + "\nRetainer");
+  await page
+    .getByRole("button", { name: "Save settings", exact: true })
+    .click();
+  assert.equal(
+    (await (await page.request.get(`${base}/api/workspace`)).json()).company
+      .settings.clockReminderMinutes,
+    20,
+  );
+  const settingsWorkspace = await (
+    await page.request.get(`${base}/api/workspace`)
+  ).json();
+  const ainaMember = settingsWorkspace.members.find(
+    (member) => member.employee_id === aina.id,
+  );
+  for (const permissions of [["read"], []]) {
+    const grant = await page.request.post(`${base}/api/auth/payroll-access`, {
+      headers: { Origin: base },
+      data: { userId: ainaMember.user_id, permissions },
+    });
+    assert(grant.ok(), await grant.text());
+  }
+  await nav("People");
+  await page.getByRole("tab", { name: "Designations", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Add designation", exact: true })
+    .click();
+  await page
+    .getByLabel("Designation name", { exact: false })
+    .fill("Browser specialist");
+  await page.getByRole("button", { name: "Add record", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await page.getByRole("tab", { name: /^Employees/ }).click();
+  await page
+    .getByRole("button", { name: "Edit UI Test Person", exact: true })
+    .click();
+  await page
+    .getByLabel("Designation (optional)", { exact: true })
+    .selectOption({ label: "Browser specialist" });
+  await page
+    .getByLabel("Employment status", { exact: true })
+    .selectOption("Consultant");
+  await page
+    .getByLabel("Employment type", { exact: true })
+    .selectOption("Retainer");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const configuredPerson = (
+    await (await page.request.get(`${base}/api/workspace`)).json()
+  ).records.find(
+    (r) => r.kind === "employee" && r.data.name === "UI Test Person",
+  );
+  assert.equal(configuredPerson.data.title, "Browser specialist");
+  assert.equal(configuredPerson.data.employmentStatus, "Consultant");
+  assert.equal(configuredPerson.data.employmentType, "Retainer");
   await nav("HR policies");
   await page
     .getByRole("heading", { name: "HR policies", exact: true })
@@ -296,9 +471,11 @@ try {
   await page
     .getByRole("heading", { name: "What can I help you with?" })
     .waitFor();
-  await page
-    .locator("[data-sonner-toast]")
-    .waitFor({ state: "hidden", timeout: 15000 });
+  await page.waitForFunction(
+    () => !document.querySelector("[data-sonner-toast]"),
+    undefined,
+    { timeout: 20000 },
+  );
   await page.screenshot({
     path: "docs/screenshots/assistant-desktop.png",
     fullPage: true,
@@ -398,6 +575,25 @@ try {
     path: "docs/screenshots/assistant-mobile.png",
     fullPage: true,
   });
+  for (const view of ["settings", "payroll"]) {
+    await page.goto(`${base}/?view=${view}`);
+    await page
+      .getByRole("heading", {
+        name: view === "settings" ? "Workspace settings" : "Payroll & payslips",
+        exact: true,
+      })
+      .waitFor();
+    assert(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+      `Mobile ${view} overflows`,
+    );
+    await page.screenshot({
+      path: `docs/screenshots/${view}-mobile.png`,
+      fullPage: true,
+    });
+  }
   await page.request.post(`${base}/api/auth/demo`, {
     headers: { Origin: base },
     data: { role: "employee" },
@@ -419,6 +615,28 @@ try {
       )
       .every((r) => r.data.salary === undefined),
   );
+  await page.goto(`${base}/?view=claims`);
+  await page
+    .getByRole("button", { name: "Correct & resubmit", exact: true })
+    .click();
+  await page.getByLabel("Amount (RM)", { exact: false }).fill("35");
+  await page
+    .getByRole("button", { name: "Resubmit claim", exact: true })
+    .click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  const corrected = (
+    await (await page.request.get(`${base}/api/workspace`)).json()
+  ).records.find((r) => r.id === correctionClaim.id);
+  assert.equal(corrected.data.status, "Pending");
+  assert.equal(corrected.data.amount, 35);
+  assert.deepEqual(
+    corrected.data.history.map((e) => e.action),
+    ["Submitted", "Returned", "Resubmitted"],
+  );
+  await page.screenshot({
+    path: "docs/screenshots/claims-mobile.png",
+    fullPage: true,
+  });
   console.log("Checking the phone PWA and public-only offline cache.");
   await page.waitForFunction(
     () => navigator.serviceWorker.controller !== null,
@@ -478,6 +696,10 @@ try {
         publicApplications: true,
         assessmentSubmission: true,
         payrollPublication: true,
+        weeklyPayRun: true,
+        equipmentReturn: true,
+        returnedClaimResubmission: true,
+        specialistControls: true,
         employeeIsolation: true,
         onboardingReview: true,
         extendedScreens: true,

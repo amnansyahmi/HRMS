@@ -52,7 +52,9 @@ export default async function Page({
           </div>
           <div>
             <h2>Payslip</h2>
-            <p>{String(data.period)}</p>
+            <p>
+              {String(data.cycle || "Monthly")} · {String(data.period)}
+            </p>
           </div>
         </header>
         <section className="payslip-details">
@@ -63,7 +65,12 @@ export default async function Page({
           </div>
           <div>
             <small>PAY PERIOD</small>
-            <strong>{String(data.period)}</strong>
+            <strong>
+              {data.startDate && data.endDate
+                ? `${data.startDate} to ${data.endDate}`
+                : String(data.period)}
+            </strong>
+            {data.payDate ? <p>Pay date: {String(data.payDate)}</p> : null}
             <p>Currency: MYR</p>
           </div>
         </section>
