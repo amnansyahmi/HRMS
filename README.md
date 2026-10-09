@@ -41,6 +41,8 @@ The phone layout has bottom navigation, safe-area spacing, larger touch controls
 
 Offline navigation displays a public reconnect screen. HR records, API responses, attachments and payslips are not put in Cache Storage. Submissions require an online connection. Recording needs HTTPS and microphone permission; keep the recording page open.
 
+Ask People AI uses a minimal conversation layout with SVG controls, specialist and voice menus, a growing composer, and phone keyboard spacing. Enter adds a new line; Ctrl/⌘ + Enter sends. History remains private to the current user and workspace.
+
 ## Connect ai-nonymauz-cloud
 
 ```dotenv

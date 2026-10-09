@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Square,
   Plus,
+  History,
   MessageSquare,
   Users,
   CalendarDays,
@@ -18,8 +19,16 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Popover } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { api } from "@/lib/client";
 import { toast } from "sonner";
 import { useWorkspace } from "./workspace-context";
@@ -63,7 +72,10 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
     [threadId, setThreadId] = useState<string | undefined>(),
     [busy, setBusy] = useState(false),
     [historyOpen, setHistoryOpen] = useState(false),
-    end = useRef<HTMLDivElement>(null),
+    [optionsOpen, setOptionsOpen] = useState(false),
+    frame = useRef<HTMLDivElement>(null),
+    conversation = useRef<HTMLDivElement>(null),
+    input = useRef<HTMLTextAreaElement>(null),
     abort = useRef<AbortController | null>(null),
     staff = isStaff(workspace.actor);
   const loadHistory = useCallback(async () => {
@@ -93,8 +105,55 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
     };
   }, []);
   useEffect(() => {
-    end.current?.scrollIntoView({ behavior: "smooth" });
+    const viewport = window.visualViewport;
+    const root = frame.current;
+    const main = root?.closest<HTMLElement>(".chat-content");
+    if (!viewport || !root || !main) return;
+    function resize() {
+      if (!window.matchMedia("(max-width: 767px)").matches) {
+        main!.style.removeProperty("height");
+        delete root!.dataset.keyboardOpen;
+        return;
+      }
+      const keyboardOpen = window.innerHeight - viewport!.height > 120;
+      root!.dataset.keyboardOpen = String(keyboardOpen);
+      const navigation =
+        document.querySelector<HTMLElement>(".mobile-bottom-nav");
+      const bottom = keyboardOpen
+        ? 0
+        : navigation?.getBoundingClientRect().height || 0;
+      const top = Math.max(
+        0,
+        root!.getBoundingClientRect().top - viewport!.offsetTop,
+      );
+      main!.style.height = `${Math.max(180, viewport!.height - top - bottom)}px`;
+    }
+    resize();
+    viewport.addEventListener("resize", resize);
+    viewport.addEventListener("scroll", resize);
+    window.addEventListener("resize", resize);
+    return () => {
+      viewport.removeEventListener("resize", resize);
+      viewport.removeEventListener("scroll", resize);
+      window.removeEventListener("resize", resize);
+      main.style.removeProperty("height");
+    };
+  }, []);
+  useEffect(() => {
+    const scroll = conversation.current;
+    scroll?.scrollTo({
+      top: scroll.scrollHeight,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "instant"
+        : "smooth",
+    });
   }, [messages, busy]);
+  useEffect(() => {
+    const textarea = input.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, [message]);
   const records = workspace.records.filter((r) =>
     mode === "resume"
       ? r.kind === "candidate"
@@ -118,6 +177,31 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
     );
   };
   const configured = workspace.ai.configured && workspace.ai.enabled;
+  const requiresRecord = ["resume", "meeting", "preferences"].includes(mode);
+  const modes = [
+    { value: "hr", label: "HR assistant" },
+    ...(workspace.actor.role === "owner" &&
+    workspace.company.settings.aiAgents.chro
+      ? [{ value: "chro", label: "CHRO brief · read only" }]
+      : []),
+    ...specialistNames
+      .filter(
+        (name) =>
+          specialistAllows(workspace.company.settings, name, "read") &&
+          (name !== "recruitment" || staff),
+      )
+      .map((name) => ({
+        value: name,
+        label: specialistLabels[name] + " specialist",
+      })),
+    ...(staff
+      ? [
+          { value: "resume", label: "Resume review" },
+          { value: "meeting", label: "Meeting summary" },
+          { value: "preferences", label: "Work preferences" },
+        ]
+      : []),
+  ];
   const threads = Array.from(new Set(history.map((m) => m.thread_id)))
     .filter(Boolean)
     .reverse();
@@ -128,10 +212,14 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
     setMessage("");
     setRecordId("");
     setMode("hr");
+    setHistoryOpen(false);
+    setOptionsOpen(false);
+    input.current?.focus();
   }
   async function send(event?: React.FormEvent) {
     event?.preventDefault();
-    if (!message.trim() || busy) return;
+    if (!message.trim() || busy || !configured || (requiresRecord && !recordId))
+      return;
     const current = message.trim(),
       old = messages;
     setMessage("");
@@ -208,416 +296,479 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
       : []),
   ];
   return (
-    <div className="assistant-page">
-      <div className="assistant-top">
-        <div>
-          <h1>People AI</h1>
-          <span>
-            {workspace.ai.model || "ai-nonymauz-cloud"}
-            <span className="dot-separator">·</span>Changes require confirmation
-          </span>
-        </div>
-        <div className="table-actions">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={() => setHistoryOpen((v) => !v)}
-          >
-            <MessageSquare size={15} />
-            History
-          </Button>
-          <Button variant="outline" size="sm" disabled={busy} onClick={newChat}>
-            <Plus size={15} />
-            New chat
-          </Button>
-        </div>
-      </div>
-      {historyOpen ? (
-        <div className="chat-history">
-          <h3>Your recent conversations</h3>
-          {threads.length ? (
-            threads.map((id) => (
-              <button
-                key={id}
-                onClick={() => {
-                  setMessages(history.filter((m) => m.thread_id === id));
-                  setThreadId(id);
-                  setHistoryOpen(false);
-                  setMode("hr");
-                  setRecordId("");
-                }}
+    <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+      <div className="assistant-page" ref={frame}>
+        <div className="assistant-top">
+          <Popover.Root open={optionsOpen} onOpenChange={setOptionsOpen}>
+            <Popover.Trigger asChild>
+              <Button
+                variant="ghost"
+                className="chat-mode-button"
+                disabled={busy}
+                aria-label="Chat options"
               >
-                {history.find((m) => m.thread_id === id && m.role === "user")
-                  ?.content || "Conversation"}
-              </button>
-            ))
-          ) : (
-            <p>No conversations yet.</p>
-          )}
-        </div>
-      ) : null}
-      {!configured ? (
-        <div className="ai-setup-note">
-          <Settings2 size={19} />
-          <div>
-            <strong>
-              {!workspace.ai.configured
-                ? "Connect ai-nonymauz-cloud"
-                : "Enable AI for your workspace"}
-            </strong>
-            <p>
-              {!workspace.ai.configured
-                ? "Add the backend URL, API key and model alias in your server environment."
-                : "The workspace owner can enable AI in Settings. Authorized records are sent to the configured endpoint."}
-            </p>
-          </div>
-          {workspace.actor.role === "owner" ? (
-            <Button size="sm" variant="outline" onClick={() => go("settings")}>
-              Settings
+                {modes.find((m) => m.value === mode)?.label || "HR assistant"}
+                <ChevronDown size={15} />
+              </Button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                className="chat-options-popover"
+                align="start"
+                sideOffset={8}
+                collisionPadding={16}
+              >
+                <h2>Chat options</h2>
+                <label className="chat-option-field">
+                  <span>Assistant</span>
+                  <NativeSelect
+                    label="Assistant mode"
+                    value={mode}
+                    onChange={(v) => {
+                      setMode(v);
+                      setRecordId("");
+                    }}
+                    options={modes}
+                  />
+                </label>
+                {requiresRecord ? (
+                  <label className="chat-option-field">
+                    <span>Record to review</span>
+                    <NativeSelect
+                      label="Record for AI review"
+                      value={recordId}
+                      onChange={setRecordId}
+                      options={[
+                        { value: "", label: "Choose a record" },
+                        ...records.map((r) => ({
+                          value: r.id,
+                          label: recordLabel(r.id),
+                        })),
+                      ]}
+                    />
+                  </label>
+                ) : null}
+                <p>{workspace.ai.model || "ai-nonymauz-cloud"}</p>
+                <p>Changes are saved only after you confirm.</p>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+          <div className="chat-top-actions">
+            <DialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={busy}
+                aria-label="History"
+                title="Conversation history"
+              >
+                <History size={18} />
+              </Button>
+            </DialogTrigger>
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={busy}
+              onClick={newChat}
+              aria-label="New chat"
+              title="New chat"
+            >
+              <Plus size={19} />
             </Button>
-          ) : null}
+          </div>
         </div>
-      ) : null}
-      <div
-        className={`conversation ${!messages.length ? "conversation-empty" : ""}`}
-      >
-        {!messages.length ? (
-          <div className="chat-welcome">
-            <span className="chat-mark">
-              <MessageSquare size={25} />
-            </span>
-            <h2>What can I help you with?</h2>
-            <p>Your HR questions, grounded in your workspace.</p>
+        {!configured ? (
+          <div className="ai-setup-note">
+            <Settings2 size={18} />
+            <div>
+              <strong>
+                {!workspace.ai.configured
+                  ? "Connect ai-nonymauz-cloud"
+                  : "Enable AI for your workspace"}
+              </strong>
+              <p>
+                {!workspace.ai.configured
+                  ? "Add your backend URL, API key and model alias to the server environment."
+                  : "The workspace owner can enable AI in Settings."}
+              </p>
+            </div>
+            {workspace.actor.role === "owner" ? (
+              <Button size="sm" variant="ghost" onClick={() => go("settings")}>
+                Settings
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        <div
+          className={`chat-stage ${messages.length ? "chat-stage-active" : "chat-stage-empty"}`}
+        >
+          {!messages.length ? (
+            <div className="chat-welcome">
+              <h1>What can I help you with?</h1>
+              <p>Ask about your people, policies or everyday work.</p>
+            </div>
+          ) : null}
+          <div
+            ref={conversation}
+            className={`conversation ${!messages.length ? "conversation-empty" : ""}`}
+            role="log"
+            aria-label="Conversation"
+            aria-live="polite"
+            aria-relevant="additions"
+            aria-busy={busy}
+          >
+            {messages.length
+              ? messages.map((m, i) => (
+                  <div
+                    className={`chat-message ${m.role === "user" ? "user-message" : "ai-message"}`}
+                    key={m.id || i}
+                  >
+                    <div className="message-body">
+                      {m.role === "user" ? (
+                        <p>{m.content}</p>
+                      ) : (
+                        <>
+                          <div className="markdown">
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              skipHtml
+                              components={{
+                                a: ({ children, href }) => (
+                                  <a
+                                    href={href}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    {children}
+                                  </a>
+                                ),
+                              }}
+                            >
+                              {m.content.replace(
+                                /\[source:([a-f0-9-]+)\]/g,
+                                (_, id) =>
+                                  `[${m.sources.find((s) => s.id === id)?.label || "Record"}]`,
+                              )}
+                            </ReactMarkdown>
+                          </div>
+                          {m.cards?.map((card) => (
+                            <div className="ai-action-card" key={card.id}>
+                              <strong>{card.label}</strong>
+                              <p>
+                                Confirm this change. Your permissions and the
+                                latest record will be checked.
+                              </p>
+                              {card.preview ? (
+                                card.action === "letter-draft" ? (
+                                  <div className="action-preview preserve-lines">
+                                    <strong>
+                                      {String(card.preview.title)}
+                                    </strong>
+                                    <p>{String(card.preview.body)}</p>
+                                    <small>
+                                      Save as draft only ·{" "}
+                                      {String(card.preview.effectiveDate)}
+                                    </small>
+                                  </div>
+                                ) : (
+                                  <pre className="action-preview">
+                                    {JSON.stringify(card.preview, null, 2)}
+                                  </pre>
+                                )
+                              ) : null}
+                              <Button
+                                size="sm"
+                                onClick={async () => {
+                                  let coordinates:
+                                    | {
+                                        latitude: number;
+                                        longitude: number;
+                                        accuracy: number;
+                                      }
+                                    | undefined;
+                                  if (card.requiresLocation) {
+                                    try {
+                                      const position =
+                                        await new Promise<GeolocationPosition>(
+                                          (resolve, reject) =>
+                                            navigator.geolocation.getCurrentPosition(
+                                              resolve,
+                                              reject,
+                                              {
+                                                enableHighAccuracy: true,
+                                                maximumAge: 0,
+                                                timeout: 15000,
+                                              },
+                                            ),
+                                        );
+                                      coordinates = {
+                                        latitude: position.coords.latitude,
+                                        longitude: position.coords.longitude,
+                                        accuracy: position.coords.accuracy,
+                                      };
+                                    } catch {
+                                      toast.error(
+                                        "Allow precise location to confirm clock-in",
+                                      );
+                                      return;
+                                    }
+                                  }
+                                  const result = await act(
+                                    "ai-confirm",
+                                    { id: card.id, coordinates },
+                                    "Confirmed action completed",
+                                  );
+                                  if (result)
+                                    setMessages((rows) =>
+                                      rows.map((message) =>
+                                        message === m
+                                          ? {
+                                              ...message,
+                                              cards: message.cards?.filter(
+                                                (c) => c.id !== card.id,
+                                              ),
+                                            }
+                                          : message,
+                                      ),
+                                    );
+                                }}
+                              >
+                                Confirm action
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={async () => {
+                                  const result = await act("ai-cancel", {
+                                    id: card.id,
+                                  });
+                                  if (result)
+                                    setMessages((rows) =>
+                                      rows.map((row) =>
+                                        row === m
+                                          ? {
+                                              ...row,
+                                              cards: row.cards?.filter(
+                                                (c) => c.id !== card.id,
+                                              ),
+                                            }
+                                          : row,
+                                      ),
+                                    );
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          ))}
+                          <div className="message-controls">
+                            <ReadAnswer compact text={m.content} />
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label="Copy answer"
+                              onClick={() =>
+                                navigator.clipboard
+                                  .writeText(m.content)
+                                  .then(() => toast.success("Answer copied"))
+                                  .catch(() =>
+                                    toast.error("Select the answer to copy it"),
+                                  )
+                              }
+                            >
+                              <Copy size={14} />
+                            </Button>
+                            {m.sources.length === 1 &&
+                            m.sources[0].kind === "meeting" ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  const r = workspace.records.find(
+                                    (r) => r.id === m.sources[0].id,
+                                  );
+                                  if (r)
+                                    edit("meeting", {
+                                      ...r,
+                                      data: { ...r.data, summary: m.content },
+                                    });
+                                }}
+                              >
+                                <FileText size={13} />
+                                Review as meeting summary
+                              </Button>
+                            ) : null}
+                          </div>
+                          {m.sources.length ? (
+                            <details className="sources-panel">
+                              <summary>
+                                <Database size={13} />
+                                {m.sources.length} records supplied
+                                <ChevronDown size={13} />
+                              </summary>
+                              <div>
+                                {m.sources.map((s) => (
+                                  <span key={s.id}>
+                                    {s.label}
+                                    <small>{s.kind}</small>
+                                  </span>
+                                ))}
+                              </div>
+                            </details>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))
+              : null}
+            {busy ? (
+              <div className="chat-message ai-message">
+                <div className="thinking">
+                  <Loader2 size={16} className="animate-spin" />
+                  Reading your workspace…
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className="composer-area">
+            <form className="chat-composer" onSubmit={send}>
+              {requiresRecord ? (
+                <button
+                  type="button"
+                  className="chat-record-chip"
+                  onClick={() => setOptionsOpen(true)}
+                >
+                  <FileText size={14} />
+                  {recordId
+                    ? recordLabel(recordId)
+                    : "Choose a record to review"}
+                  <ChevronDown size={13} />
+                </button>
+              ) : null}
+              <Textarea
+                ref={input}
+                aria-label="Message People AI"
+                placeholder="Ask People AI…"
+                rows={1}
+                maxLength={4000}
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Enter" &&
+                    (e.ctrlKey || e.metaKey) &&
+                    !e.nativeEvent.isComposing
+                  ) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+              />
+              <div className="composer-toolbar">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Chat options"
+                  title="Choose an assistant or record"
+                  onClick={() => setOptionsOpen(true)}
+                  disabled={busy}
+                >
+                  <Settings2 size={18} />
+                </Button>
+                <div className="composer-send-tools">
+                  <Dictation
+                    compact
+                    onTranscript={appendDictation}
+                    disabled={busy}
+                  />
+                  {busy ? (
+                    <Button
+                      type="button"
+                      className="send-button"
+                      size="icon"
+                      aria-label="Stop AI request"
+                      onClick={() => abort.current?.abort()}
+                    >
+                      <Square size={14} />
+                    </Button>
+                  ) : (
+                    <Button
+                      type="submit"
+                      className="send-button"
+                      size="icon"
+                      aria-label="Send message"
+                      title="Send (Ctrl / ⌘ + Enter)"
+                      disabled={
+                        !configured ||
+                        !message.trim() ||
+                        (requiresRecord && !recordId)
+                      }
+                    >
+                      <ArrowUp size={20} />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </form>
+            {messages.length ? (
+              <p className="composer-foot">
+                AI can make mistakes. Review important details.
+              </p>
+            ) : null}
+          </div>
+          {!messages.length ? (
             <div className="suggestion-grid">
               {suggestions.map((s) => (
                 <button
                   key={s.label}
                   onClick={() => {
                     setMode("hr");
+                    setRecordId("");
                     setMessage(s.prompt);
+                    input.current?.focus();
                   }}
                 >
-                  <s.icon size={19} />
+                  <s.icon size={15} />
                   <span>{s.label}</span>
                 </button>
               ))}
             </div>
-          </div>
-        ) : (
-          messages.map((m, i) => (
-            <div
-              className={`chat-message ${m.role === "user" ? "user-message" : "ai-message"}`}
-              key={m.id || i}
-            >
-              {m.role === "assistant" ? (
-                <span className="message-avatar">N</span>
-              ) : null}
-              <div className="message-body">
-                {m.role === "user" ? (
-                  <p>{m.content}</p>
-                ) : (
-                  <>
-                    <div className="markdown">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        skipHtml
-                        components={{
-                          a: ({ children, href }) => (
-                            <a href={href} target="_blank" rel="noreferrer">
-                              {children}
-                            </a>
-                          ),
-                        }}
-                      >
-                        {m.content.replace(
-                          /\[source:([a-f0-9-]+)\]/g,
-                          (_, id) =>
-                            `[${m.sources.find((s) => s.id === id)?.label || "Record"}]`,
-                        )}
-                      </ReactMarkdown>
-                    </div>
-                    {m.cards?.map((card) => (
-                      <div className="ai-action-card" key={card.id}>
-                        <strong>{card.label}</strong>
-                        <p>
-                          Confirm this change. Your permissions and the latest
-                          record will be checked.
-                        </p>
-                        {card.preview ? (
-                          card.action === "letter-draft" ? (
-                            <div className="action-preview preserve-lines">
-                              <strong>{String(card.preview.title)}</strong>
-                              <p>{String(card.preview.body)}</p>
-                              <small>
-                                Save as draft only ·{" "}
-                                {String(card.preview.effectiveDate)}
-                              </small>
-                            </div>
-                          ) : (
-                            <pre className="action-preview">
-                              {JSON.stringify(card.preview, null, 2)}
-                            </pre>
-                          )
-                        ) : null}
-                        <Button
-                          size="sm"
-                          onClick={async () => {
-                            let coordinates:
-                              | {
-                                  latitude: number;
-                                  longitude: number;
-                                  accuracy: number;
-                                }
-                              | undefined;
-                            if (card.requiresLocation) {
-                              try {
-                                const position =
-                                  await new Promise<GeolocationPosition>(
-                                    (resolve, reject) =>
-                                      navigator.geolocation.getCurrentPosition(
-                                        resolve,
-                                        reject,
-                                        {
-                                          enableHighAccuracy: true,
-                                          maximumAge: 0,
-                                          timeout: 15000,
-                                        },
-                                      ),
-                                  );
-                                coordinates = {
-                                  latitude: position.coords.latitude,
-                                  longitude: position.coords.longitude,
-                                  accuracy: position.coords.accuracy,
-                                };
-                              } catch {
-                                toast.error(
-                                  "Allow precise location to confirm clock-in",
-                                );
-                                return;
-                              }
-                            }
-                            const result = await act(
-                              "ai-confirm",
-                              { id: card.id, coordinates },
-                              "Confirmed action completed",
-                            );
-                            if (result)
-                              setMessages((rows) =>
-                                rows.map((message) =>
-                                  message === m
-                                    ? {
-                                        ...message,
-                                        cards: message.cards?.filter(
-                                          (c) => c.id !== card.id,
-                                        ),
-                                      }
-                                    : message,
-                                ),
-                              );
-                          }}
-                        >
-                          Confirm action
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={async () => {
-                            const result = await act("ai-cancel", {
-                              id: card.id,
-                            });
-                            if (result)
-                              setMessages((rows) =>
-                                rows.map((row) =>
-                                  row === m
-                                    ? {
-                                        ...row,
-                                        cards: row.cards?.filter(
-                                          (c) => c.id !== card.id,
-                                        ),
-                                      }
-                                    : row,
-                                ),
-                              );
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    ))}
-                    <div className="message-controls">
-                      <ReadAnswer text={m.content} />
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Copy answer"
-                        onClick={() =>
-                          navigator.clipboard
-                            .writeText(m.content)
-                            .then(() => toast.success("Answer copied"))
-                            .catch(() =>
-                              toast.error("Select the answer to copy it"),
-                            )
-                        }
-                      >
-                        <Copy size={14} />
-                      </Button>
-                      {m.sources.length === 1 &&
-                      m.sources[0].kind === "meeting" ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            const r = workspace.records.find(
-                              (r) => r.id === m.sources[0].id,
-                            );
-                            if (r)
-                              edit("meeting", {
-                                ...r,
-                                data: { ...r.data, summary: m.content },
-                              });
-                          }}
-                        >
-                          <FileText size={13} />
-                          Review as meeting summary
-                        </Button>
-                      ) : null}
-                    </div>
-                    {m.sources.length ? (
-                      <details className="sources-panel">
-                        <summary>
-                          <Database size={13} />
-                          {m.sources.length} records supplied
-                          <ChevronDown size={13} />
-                        </summary>
-                        <div>
-                          {m.sources.map((s) => (
-                            <span key={s.id}>
-                              {s.label}
-                              <small>{s.kind}</small>
-                            </span>
-                          ))}
-                        </div>
-                      </details>
-                    ) : null}
-                  </>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-        {busy ? (
-          <div className="chat-message ai-message">
-            <span className="message-avatar">N</span>
-            <div className="thinking">
-              <Loader2 size={16} className="animate-spin" />
-              Reading your workspace…
-            </div>
-          </div>
-        ) : null}
-        <div ref={end} />
-      </div>
-      <div className="composer-area">
-        <Dictation onTranscript={appendDictation} disabled={busy} />
-        <div className="composer-options">
-          <NativeSelect
-            label="Assistant mode"
-            value={mode}
-            onChange={(v) => {
-              setMode(v);
-              setRecordId("");
-            }}
-            options={[
-              { value: "hr", label: "HR assistant" },
-              ...(workspace.actor.role === "owner" &&
-              workspace.company.settings.aiAgents.chro
-                ? [{ value: "chro", label: "CHRO brief · read only" }]
-                : []),
-              ...specialistNames
-                .filter(
-                  (name) =>
-                    specialistAllows(
-                      workspace.company.settings,
-                      name,
-                      "read",
-                    ) &&
-                    (name !== "recruitment" || staff),
-                )
-                .map((name) => ({
-                  value: name,
-                  label: specialistLabels[name] + " specialist",
-                })),
-              ...(staff
-                ? [
-                    { value: "resume", label: "Resume review" },
-                    { value: "meeting", label: "Meeting summary" },
-                    { value: "preferences", label: "Work preferences" },
-                  ]
-                : []),
-            ]}
-          />
-
-          {["resume", "meeting", "preferences"].includes(mode) ? (
-            <NativeSelect
-              label="Record for AI review"
-              value={recordId}
-              onChange={setRecordId}
-              options={[
-                { value: "", label: "Choose a record" },
-                ...records.map((r) => ({
-                  value: r.id,
-                  label: recordLabel(r.id),
-                })),
-              ]}
-            />
           ) : null}
         </div>
-        <form className="chat-composer" onSubmit={send}>
-          <Textarea
-            aria-label="Message People AI"
-            placeholder="Ask about your people, policies or work…"
-            rows={2}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-          />
-          {busy ? (
-            <Button
-              type="button"
-              className="send-button"
-              size="icon"
-              aria-label="Stop AI request"
-              onClick={() => abort.current?.abort()}
-            >
-              <Square size={14} />
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              className="send-button"
-              size="icon"
-              aria-label="Send message"
-              disabled={
-                !configured ||
-                !message.trim() ||
-                (["resume", "meeting", "preferences"].includes(mode) &&
-                  !recordId)
-              }
-            >
-              <ArrowUp size={19} />
-            </Button>
-          )}
-        </form>
-        <p className="composer-foot">
-          AI can make mistakes. Check the records. Enter adds a new line; Ctrl +
-          Enter sends.
-        </p>
+        <DialogContent className="chat-history-dialog">
+          <DialogTitle>Recent conversations</DialogTitle>
+          <DialogDescription>
+            Only your workspace conversations appear here.
+          </DialogDescription>
+          <div className="chat-history">
+            {threads.length ? (
+              threads.map((id) => (
+                <button
+                  key={id}
+                  onClick={() => {
+                    setMessages(history.filter((m) => m.thread_id === id));
+                    setThreadId(id);
+                    setHistoryOpen(false);
+                    setMode("hr");
+                    setRecordId("");
+                  }}
+                >
+                  <MessageSquare size={16} />
+                  <span>
+                    {history.find(
+                      (m) => m.thread_id === id && m.role === "user",
+                    )?.content || "Conversation"}
+                  </span>
+                </button>
+              ))
+            ) : (
+              <p>No conversations yet. Your chats will appear here.</p>
+            )}
+          </div>
+        </DialogContent>
       </div>
-    </div>
+    </Dialog>
   );
 }

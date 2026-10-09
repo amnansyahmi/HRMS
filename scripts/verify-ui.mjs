@@ -508,7 +508,10 @@ try {
   await page
     .getByRole("heading", { name: "What can I help you with?" })
     .waitFor();
-  await page.getByRole("button", { name: "Dictate message" }).click();
+  await page.getByRole("button", { name: "Voice input", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Dictate message", exact: true })
+    .click();
   await page.waitForFunction(
     () =>
       document.querySelector('textarea[aria-label="Message People AI"]')
@@ -529,6 +532,109 @@ try {
     path: "docs/screenshots/assistant-desktop.png",
     fullPage: true,
   });
+  console.log(
+    "Checking minimal chat composer, history and specialist controls with a mocked AI response.",
+  );
+  const chatThread = "e790fd50-6f13-488a-b317-c8c020820711";
+  const chatHistory = [];
+  let chatRequests = 0;
+  await page.route("**/api/workspace", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.ai = { configured: true, enabled: true, model: "ui-test-model" };
+    await route.fulfill({ response, json: data });
+  });
+  await page.route("**/api/ai", async (route) => {
+    if (route.request().method() === "GET")
+      return route.fulfill({ json: chatHistory });
+    chatRequests++;
+    const body = route.request().postDataJSON();
+    const answer =
+      "Here’s a clear starting point for your team.\n\n- Review pending leave requests.\n- Check dates against the team calendar.\n- Confirm any changes before saving.\n\n| Request | Status | Next step |\n| --- | --- | --- |\n| Annual leave | Pending | Review the dates |\n\nI can help you review a specific request next.";
+    chatHistory.push(
+      {
+        role: "user",
+        content: body.message,
+        sources: [],
+        thread_id: chatThread,
+      },
+      {
+        role: "assistant",
+        content: answer,
+        sources: [],
+        thread_id: chatThread,
+      },
+    );
+    await route.fulfill({
+      json: { threadId: chatThread, text: answer, sources: [], cards: [] },
+    });
+  });
+  await page.goto(`${base}/?view=assistant`);
+  await page
+    .getByRole("heading", { name: "What can I help you with?" })
+    .waitFor();
+  await page
+    .getByRole("button", { name: "Who is on leave?", exact: true })
+    .click();
+  assert(
+    (await page.getByLabel("Message People AI").inputValue()).includes("leave"),
+  );
+  await page.getByLabel("Message People AI").fill("Review my team requests");
+  await page.getByLabel("Message People AI").press("Enter");
+  assert.equal(chatRequests, 0, "Enter must add a newline without sending");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await page.locator(".ai-message table").waitFor();
+  assert.equal(chatRequests, 1);
+  await page.screenshot({
+    path: "docs/screenshots/assistant-conversation-desktop.png",
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: /Review my team requests/ })
+    .waitFor();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  assert.equal(await page.locator(".chat-message").count(), 0);
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: /Review my team requests/ })
+    .click();
+  await page.locator(".ai-message table").waitFor();
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page
+    .locator(".assistant-top")
+    .getByRole("button", { name: "Chat options", exact: true })
+    .click();
+  await page
+    .getByLabel("Assistant mode", { exact: true })
+    .selectOption("resume");
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Message People AI").fill("Review this resume");
+  await page.getByLabel("Message People AI").press("Control+Enter");
+  assert.equal(
+    chatRequests,
+    1,
+    "Keyboard submit must respect required record selection",
+  );
+  await page
+    .getByRole("button", { name: "Choose a record to review", exact: false })
+    .click();
+  await page
+    .getByLabel("Record for AI review", { exact: true })
+    .selectOption({ index: 1 });
+  await page.keyboard.press("Escape");
+  assert(
+    !(await page
+      .getByRole("button", { name: "Send message", exact: true })
+      .isDisabled()),
+  );
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.unroute("**/api/workspace");
+  await page.unroute("**/api/ai");
+  await page.goto(`${base}/?view=assistant`);
   console.log("Checking approval inbox and scoped desktop calendar.");
   const inboxRequest = await page.request.post(`${base}/api/records/time_off`, {
     headers: { Origin: base },
@@ -682,6 +788,114 @@ try {
     path: "docs/screenshots/assistant-mobile.png",
     fullPage: true,
   });
+  const composerBounds = await page.locator(".chat-composer").boundingBox();
+  const navigationBounds = await page
+    .locator(".mobile-bottom-nav")
+    .boundingBox();
+  assert(
+    composerBounds &&
+      navigationBounds &&
+      composerBounds.y + composerBounds.height <= navigationBounds.y,
+    "Phone navigation overlaps chat input",
+  );
+  await page
+    .getByLabel("Message People AI")
+    .fill("A longer message\n".repeat(18));
+  assert(
+    (await page.getByLabel("Message People AI").boundingBox()).height <= 162,
+    "Growing phone composer exceeds its height limit",
+  );
+  assert(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    "Phone chat overflows horizontally",
+  );
+  await page.getByLabel("Message People AI").fill("");
+  await page
+    .locator(".assistant-top")
+    .getByRole("button", { name: "Chat options", exact: true })
+    .click();
+  const optionsBounds = await page
+    .locator(".chat-options-popover")
+    .boundingBox();
+  assert(
+    optionsBounds.x >= 0 && optionsBounds.x + optionsBounds.width <= 390,
+    "Chat options escape the phone viewport",
+  );
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => {
+    Object.defineProperty(window.visualViewport, "height", {
+      configurable: true,
+      value: 460,
+    });
+    window.visualViewport.dispatchEvent(new Event("resize"));
+  });
+  assert(
+    !(await page.locator(".mobile-bottom-nav").isVisible()),
+    "Phone navigation should clear the keyboard",
+  );
+  const typingBounds = await page.locator(".chat-composer").boundingBox();
+  assert(
+    typingBounds.y + typingBounds.height <= 460,
+    "Chat composer is covered by the keyboard",
+  );
+  await page.evaluate(() => {
+    delete window.visualViewport.height;
+    window.visualViewport.dispatchEvent(new Event("resize"));
+  });
+  assert(
+    await page.locator(".mobile-bottom-nav").isVisible(),
+    "Phone navigation did not return after typing",
+  );
+  await page.route("**/api/workspace", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    data.ai = { configured: true, enabled: true, model: "ui-test-model" };
+    await route.fulfill({ response, json: data });
+  });
+  await page.route("**/api/ai", async (route) =>
+    route.fulfill({ json: chatHistory }),
+  );
+  await page.goto(`${base}/?view=assistant`);
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: /Review my team requests/ })
+    .click();
+  await page.locator(".ai-message table").waitFor();
+  await page
+    .locator('[data-slot="dialog-content"]')
+    .waitFor({ state: "detached" });
+  await page.screenshot({
+    path: "docs/screenshots/assistant-conversation-mobile.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 320, height: 568 });
+  assert(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    "Small phone chat overflows horizontally",
+  );
+  await page.waitForFunction(() => {
+    const composer = document
+      .querySelector(".chat-composer")
+      ?.getBoundingClientRect();
+    const nav = document
+      .querySelector(".mobile-bottom-nav")
+      ?.getBoundingClientRect();
+    return composer && nav && composer.bottom <= nav.top;
+  });
+  const smallComposer = await page.locator(".chat-composer").boundingBox();
+  const smallNav = await page.locator(".mobile-bottom-nav").boundingBox();
+  assert(
+    smallComposer.y + smallComposer.height <= smallNav.y,
+    "Small phone navigation covers the chat composer",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.unroute("**/api/workspace");
+  await page.unroute("**/api/ai");
   for (const view of ["settings", "payroll"]) {
     await page.goto(`${base}/?view=${view}`);
     await page
