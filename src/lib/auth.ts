@@ -9,15 +9,14 @@ import { cookies } from "next/headers";
 import { z } from "zod";
 import { db, transaction, type DB } from "./db";
 import { fail } from "./errors";
+import { checkMFA } from "./account";
+import { queueEmail } from "./notifications";
 import type { Actor, Company, Role } from "./types";
 export const COOKIE = "hrms_session";
 export const hashToken = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export const token = () => randomBytes(32).toString("hex");
-export const demoEnabled = () =>
-  process.env.DEMO_MODE === "true" &&
-  process.env.NODE_ENV !== "production" &&
-  !process.env.VERCEL;
+export const demoEnabled = () => process.env.DEMO_MODE !== "false";
 export const passwordSchema = z
   .string()
   .min(12, "Use at least 12 characters")
@@ -90,7 +89,7 @@ export async function getActor(): Promise<Actor> {
   const session = (await cookies()).get(COOKIE)?.value;
   if (!session) fail("Please sign in to continue", 401);
   const result = await db.query<Actor>(
-    `SELECT u.id AS "userId", u.name, u.email, s.company_id AS "companyId", m.role, m.employee_id AS "employeeId" FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id AND m.company_id=s.company_id WHERE s.token_hash=$1 AND s.expires_at>now()`,
+    `SELECT u.id AS "userId", u.name, u.email, s.company_id AS "companyId", m.role, m.employee_id AS "employeeId" FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id AND m.company_id=s.company_id WHERE s.token_hash=$1 AND s.expires_at>now() AND (NOT EXISTS(SELECT 1 FROM companies c WHERE c.id=s.company_id AND c.is_demo) OR s.created_at>now()-interval '7 days')`,
     [hashToken(session)],
   );
   if (!result.rows[0]) fail("Your session expired. Please sign in again.", 401);
@@ -105,13 +104,30 @@ export async function getCompany(
     [actor.companyId],
   );
   if (!result.rows[0]) fail("Workspace not found", 404);
-  return result.rows[0];
+  const company = result.rows[0];
+  return {
+    ...company,
+    settings: {
+      ...defaultSettings,
+      ...company.settings,
+      aiAgents: { ...defaultSettings.aiAgents, ...company.settings.aiAgents },
+    },
+  };
 }
 export const defaultSettings = {
   timezone: "Asia/Kuala_Lumpur",
   workDays: [1, 2, 3, 4, 5],
   holidays: [],
+  overtimeRates: { Normal: 1.5, "Rest day": 2, "Public holiday": 3 },
   aiEnabled: false,
+  aiActionsEnabled: false,
+  aiAgents: {
+    hr: true,
+    recruit: true,
+    resume: true,
+    meeting: true,
+    preferences: true,
+  },
   careersIntro: "Join our team. Explore opportunities and apply below.",
   registrationNo: "",
   taxNo: "",
@@ -174,6 +190,7 @@ export async function login(input: unknown) {
     .object({
       email: z.email().toLowerCase(),
       password: z.string().min(1).max(128),
+      code: z.string().max(64).default(""),
     })
     .parse(input);
   await rateLimit("login:" + data.email, 10, 900);
@@ -189,6 +206,16 @@ export async function login(input: unknown) {
     user?.password_hash || dummy,
   );
   if (!user || !valid) fail("Email or password is incorrect", 401);
+  const mfa = (
+    await db.query<{ enabled: boolean }>(
+      "SELECT enabled FROM user_mfa WHERE user_id=$1",
+      [user.id],
+    )
+  ).rows[0];
+  if (mfa?.enabled) {
+    if (!data.code) fail("Enter your authenticator code or recovery code", 428);
+    await checkMFA(user.id, data.code);
+  }
   const member = (
     await db.query<{ company_id: string }>(
       "SELECT company_id FROM memberships WHERE user_id=$1 ORDER BY company_id LIMIT 1",
@@ -256,6 +283,13 @@ export async function createInvite(actor: Actor, input: unknown) {
         hashToken(plain),
       ],
     );
+    await queueEmail(
+      tx,
+      actor.companyId,
+      data.email,
+      "Join your Nonymauz People workspace",
+      `${actor.name} invited you to their workspace. Set up your account here:\n${process.env.APP_URL || "http://localhost:3000"}/invite/${plain}`,
+    );
     await audit(tx, actor, "Created access invitation", id, {
       email: data.email,
       role: data.role,
@@ -272,9 +306,22 @@ export async function acceptInvite(input: unknown) {
       token: z.string().regex(/^[a-f0-9]{64}$/),
       name: z.string().trim().min(2).max(100),
       password: passwordSchema,
+      code: z.string().max(64).default(""),
     })
     .parse(input);
   await rateLimit("invite:" + data.token, 5, 900);
+  const existing = (
+    await db.query<{ id: string; password_hash: string; enabled: boolean }>(
+      "SELECT u.id,u.password_hash,coalesce(m.enabled,false) AS enabled FROM invites i JOIN users u ON u.email=i.email LEFT JOIN user_mfa m ON m.user_id=u.id WHERE i.token_hash=$1 AND i.expires_at>now() AND i.accepted_at IS NULL",
+      [hashToken(data.token)],
+    )
+  ).rows[0];
+  if (existing?.enabled) {
+    if (!(await verifyPassword(data.password, existing.password_hash)))
+      fail("Password is incorrect", 401);
+    if (!data.code) fail("Enter your authenticator or recovery code", 428);
+    await checkMFA(existing.id, data.code);
+  }
   const hash = await passwordHash(data.password);
   const result = await transaction(async (tx) => {
     const invite = (

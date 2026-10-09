@@ -1,4 +1,5 @@
 "use client";
+import { SecuritySettings } from "./security-page";
 import { useState } from "react";
 import {
   Save,
@@ -114,13 +115,94 @@ export function SettingsPage() {
         title="Workspace settings"
         description="Your company, access and AI connection."
       />
+      {owner ? (
+        <section className="settings-panel">
+          <h2>AI assistants</h2>
+          <div className="checklist">
+            {["hr", "recruit", "resume", "meeting", "preferences"].map(
+              (mode) => (
+                <label key={mode}>
+                  <Checkbox
+                    checked={
+                      settings.aiAgents?.[
+                        mode as keyof typeof settings.aiAgents
+                      ] !== false
+                    }
+                    onCheckedChange={(value) =>
+                      setSettings((s) => ({
+                        ...s,
+                        aiAgents: {
+                          ...(s.aiAgents || {
+                            hr: true,
+                            recruit: true,
+                            resume: true,
+                            meeting: true,
+                            preferences: true,
+                          }),
+                          [mode]: value === true,
+                        },
+                      }))
+                    }
+                  />
+                  <span>
+                    {mode === "hr"
+                      ? "HR questions"
+                      : mode === "resume"
+                        ? "Resume review"
+                        : mode === "preferences"
+                          ? "Work preferences"
+                          : mode === "meeting"
+                            ? "Meeting summaries"
+                            : "Recruitment"}
+                  </span>
+                </label>
+              ),
+            )}
+            <label>
+              <Checkbox
+                checked={!!settings.aiActionsEnabled}
+                onCheckedChange={(value) =>
+                  setSettings((s) => ({
+                    ...s,
+                    aiActionsEnabled: value === true,
+                  }))
+                }
+              />
+              <span>
+                Allow AI to prepare changes that require human confirmation
+              </span>
+            </label>
+          </div>
+          <Button
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await api("/api/workspace", { name, settings }, "PATCH");
+                await refresh();
+                toast.success("AI controls saved");
+              } catch (e) {
+                toast.error((e as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Save AI controls
+          </Button>
+        </section>
+      ) : null}
       <Tabs defaultValue="general">
         <TabsList>
           <TabsTrigger value="general">General</TabsTrigger>
+          <TabsTrigger value="security">Account security</TabsTrigger>
           {owner ? <TabsTrigger value="access">Team access</TabsTrigger> : null}
           <TabsTrigger value="ai">AI connection</TabsTrigger>
           {owner ? <TabsTrigger value="activity">Activity</TabsTrigger> : null}
         </TabsList>
+        <TabsContent value="security">
+          <SecuritySettings />
+        </TabsContent>
         <TabsContent value="general">
           <form className="settings-form" onSubmit={save}>
             <section className="settings-section">
@@ -204,6 +286,30 @@ export function SettingsPage() {
                     </Button>
                   ),
                 )}
+              </div>
+              <div className="record-form-grid">
+                {Object.entries(settings.overtimeRates).map(([type, rate]) => (
+                  <label className="form-field" key={type}>
+                    {type} overtime multiplier
+                    <Input
+                      type="number"
+                      step="0.05"
+                      min="1"
+                      max="10"
+                      disabled={!owner}
+                      value={rate}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          overtimeRates: {
+                            ...s.overtimeRates,
+                            [type]: Number(e.target.value),
+                          },
+                        }))
+                      }
+                    />
+                  </label>
+                ))}
               </div>
               <div className="form-field">
                 <Label htmlFor="holidays">Company holidays</Label>

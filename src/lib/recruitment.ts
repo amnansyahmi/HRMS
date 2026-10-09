@@ -6,6 +6,8 @@ import { recordById, insertRecord, normalize } from "./hr";
 import { schemas } from "./schema";
 import { fail } from "./errors";
 import { isStaff, type Actor, type Company, type HRRecord } from "./types";
+import { profileTemplate, scoreProfile } from "./profile-templates";
+import { queueEmail } from "./notifications";
 import { extractFile } from "./files";
 export async function careers(slug: string) {
   const company = (
@@ -40,6 +42,11 @@ export async function applyToJob(slug: string, input: unknown, file?: File) {
     ...(attachment ? { resume: attachment.text } : {}),
     stage: "Applied",
     notes: "",
+    employeeId: null,
+    interviewAt: null,
+    stageHistory: [
+      { stage: "Applied", at: new Date().toISOString(), by: "Applicant" },
+    ],
     resumeFileId: fileId,
   });
   await rateLimit(`apply:${slug}:${data.email}`, 3, 3600);
@@ -63,6 +70,16 @@ export async function applyToJob(slug: string, input: unknown, file?: File) {
       )
     ).rows[0];
     if (!job) fail("This position is no longer accepting applications", 404);
+    const questions = (job.data.screeningQuestions as string[]) || [];
+    if (
+      data.screeningAnswers.length !== questions.length ||
+      questions.some(
+        (q, i) =>
+          data.screeningAnswers[i]?.question !== q ||
+          !data.screeningAnswers[i].answer.trim(),
+      )
+    )
+      fail("Answer every screening question from the current job listing");
     if (attachment) {
       const size = Number(
         (
@@ -107,16 +124,29 @@ export async function applyToJob(slug: string, input: unknown, file?: File) {
 }
 export async function inviteAssessment(actor: Actor, input: unknown) {
   if (!isStaff(actor)) fail("Only HR can assign assessments", 403);
-  const { assessmentId, candidateId } = z
-    .object({ assessmentId: z.uuid(), candidateId: z.uuid() })
+  const { assessmentId, candidateId, employeeId } = z
+    .object({
+      assessmentId: z.uuid(),
+      candidateId: z.uuid().optional(),
+      employeeId: z.uuid().optional(),
+    })
+    .refine(
+      (v) => !!v.candidateId !== !!v.employeeId,
+      "Choose a candidate or an employee",
+    )
     .parse(input);
   const assessment = await recordById(actor, assessmentId, "assessment"),
-    candidate = await recordById(actor, candidateId, "candidate");
+    candidate = await recordById(
+      actor,
+      candidateId || employeeId!,
+      candidateId ? "candidate" : "employee",
+    );
   const plain = token();
   await transaction(async (tx) => {
     const data = schemas.assessment_result.parse({
       assessmentId,
-      candidateId,
+      candidateId: candidateId || null,
+      employeeId: employeeId || null,
       answers: [],
       score: 0,
       tokenHash: hashToken(plain),
@@ -124,7 +154,20 @@ export async function inviteAssessment(actor: Actor, input: unknown) {
       submittedAt: null,
       assessmentSnapshot: assessment.data,
     });
-    await insertRecord(tx, actor, "assessment_result", data);
+    await insertRecord(
+      tx,
+      actor,
+      "assessment_result",
+      data,
+      employeeId || null,
+    );
+    await queueEmail(
+      tx,
+      actor.companyId,
+      String(candidate.data.email),
+      "Your assessment invitation",
+      `Complete this assessment within seven days:\n${process.env.APP_URL || "http://localhost:3000"}/assessment/${plain}`,
+    );
     await audit(tx, actor, "Assigned candidate assessment", candidate.id);
   });
   return {
@@ -190,6 +233,7 @@ export async function submitAssessment(plain: string, input: unknown) {
     const data = {
       ...record.data,
       answers,
+      profile: scoreProfile(assessment.type, answers),
       score,
       submittedAt: new Date().toISOString(),
     };
@@ -205,5 +249,23 @@ export async function submitAssessment(plain: string, input: unknown) {
       submitted: true,
       ...(assessment.type === "Skills" ? { score } : {}),
     };
+  });
+}
+
+export async function createProfileTemplate(actor: Actor, input: unknown) {
+  if (!isStaff(actor)) fail("Only HR can create questionnaires", 403);
+  const { type } = z.object({ type: z.enum(["DISC", "DOPE"]) }).parse(input);
+  const template = profileTemplate(type);
+  return transaction(async (tx) => {
+    const existing = (
+      await tx.query<HRRecord>(
+        "SELECT * FROM hr_records WHERE company_id=$1 AND kind='assessment' AND data->>'title'=$2",
+        [actor.companyId, template.title],
+      )
+    ).rows[0];
+    return (
+      existing ||
+      insertRecord(tx, actor, "assessment", schemas.assessment.parse(template))
+    );
   });
 }

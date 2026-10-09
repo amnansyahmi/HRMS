@@ -1,4 +1,5 @@
 "use client";
+import { isStaff } from "@/lib/types";
 import { useState } from "react";
 import {
   ClipboardCheck,
@@ -27,18 +28,21 @@ export function AssessmentsPage() {
   const { workspace, edit, act, ask } = useWorkspace(),
     [selected, setSelected] = useState<HRRecord | null>(null),
     [candidateId, setCandidateId] = useState(""),
+    [employeeId, setEmployeeId] = useState(""),
     [link, setLink] = useState(""),
     [busy, setBusy] = useState(false),
     assessments = workspace.records.filter((r) => r.kind === "assessment"),
     results = workspace.records.filter((r) => r.kind === "assessment_result"),
-    candidates = workspace.records.filter((r) => r.kind === "candidate");
+    candidates = workspace.records.filter((r) => r.kind === "candidate"),
+    employees = workspace.records.filter((r) => r.kind === "employee"),
+    staff = isStaff(workspace.actor);
   async function assign() {
     if (!selected) return;
     setBusy(true);
     try {
       const result = (await act("assessment-invite", {
         assessmentId: selected.id,
-        candidateId,
+        ...(employeeId ? { employeeId } : { candidateId }),
       })) as { url: string } | undefined;
       if (result) setLink(result.url);
     } finally {
@@ -51,16 +55,87 @@ export function AssessmentsPage() {
         title="Skills & work preferences"
         description="Learn how candidates solve problems and prefer to work."
         action={
-          <AddButton onClick={() => edit("assessment")}>
-            Add assessment
-          </AddButton>
+          staff ? (
+            <AddButton onClick={() => edit("assessment")}>
+              Add assessment
+            </AddButton>
+          ) : null
         }
       />
       <Tabs defaultValue="assessments">
         <TabsList>
           <TabsTrigger value="assessments">Assessments</TabsTrigger>
           <TabsTrigger value="results">Invitations & results</TabsTrigger>
+          <TabsTrigger value="profiles">Team profiles</TabsTrigger>
         </TabsList>
+        <TabsContent value="profiles">
+          <div className="table-toolbar">
+            {staff ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    void act(
+                      "profile-template",
+                      { type: "DISC" },
+                      "DISC reflection added",
+                    )
+                  }
+                >
+                  Add DISC reflection
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    void act(
+                      "profile-template",
+                      { type: "DOPE" },
+                      "DOPE reflection added",
+                    )
+                  }
+                >
+                  Add DOPE reflection
+                </Button>
+              </>
+            ) : null}
+          </div>
+          <div className="record-cards">
+            {results
+              .filter(
+                (r) =>
+                  r.data.submittedAt &&
+                  Object.keys((r.data.profile as object) || {}).length,
+              )
+              .map((r) => (
+                <div className="record-card" key={r.id}>
+                  <h3>
+                    {String(
+                      employees.find((e) => e.id === r.employee_id)?.data
+                        .name ||
+                        candidates.find((c) => c.id === r.data.candidateId)
+                          ?.data.name ||
+                        "Person",
+                    )}
+                  </h3>
+                  <small>
+                    {String(
+                      (r.data.assessmentSnapshot as { type: string }).type,
+                    )}{" "}
+                    · {shortDate(r.data.submittedAt)}
+                  </small>
+                  {Object.entries(r.data.profile as Record<string, number>).map(
+                    ([label, value]) => (
+                      <div key={label} className="profile-bar">
+                        <span>{label}</span>
+                        <progress max={100} value={value} />
+                        <strong>{value}%</strong>
+                      </div>
+                    ),
+                  )}
+                </div>
+              ))}
+          </div>
+        </TabsContent>
         <TabsContent value="assessments">
           <div className="record-cards">
             {assessments.map((a) => (
@@ -75,26 +150,30 @@ export function AssessmentsPage() {
                   {(a.data.questions as unknown[]).length} questions
                 </small>
                 <div className="card-actions">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setSelected(a);
-                      setLink("");
-                      setCandidateId("");
-                    }}
-                  >
-                    <Link2 size={14} />
-                    Assign
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label={`Edit ${a.data.title}`}
-                    onClick={() => edit("assessment", a)}
-                  >
-                    <Pencil size={15} />
-                  </Button>
+                  {staff ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setSelected(a);
+                        setLink("");
+                        setCandidateId("");
+                      }}
+                    >
+                      <Link2 size={14} />
+                      Assign
+                    </Button>
+                  ) : null}
+                  {staff ? (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`Edit ${a.data.title}`}
+                      onClick={() => edit("assessment", a)}
+                    >
+                      <Pencil size={15} />
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             ))}
@@ -129,8 +208,12 @@ export function AssessmentsPage() {
                       <tr key={r.id}>
                         <td>
                           {String(
-                            candidates.find((c) => c.id === r.data.candidateId)
-                              ?.data.name || "Candidate",
+                            employees.find((e) => e.id === r.employee_id)?.data
+                              .name ||
+                              candidates.find(
+                                (c) => c.id === r.data.candidateId,
+                              )?.data.name ||
+                              "Candidate",
                           )}
                         </td>
                         <td>
@@ -229,25 +312,48 @@ export function AssessmentsPage() {
               </Button>
             </div>
           ) : (
-            <NativeSelect
-              label="Candidate"
-              value={candidateId}
-              onChange={setCandidateId}
-              options={[
-                { value: "", label: "Choose candidate" },
-                ...candidates.map((c) => ({
-                  value: c.id,
-                  label: String(c.data.name),
-                })),
-              ]}
-            />
+            <>
+              <NativeSelect
+                label="Employee (or choose candidate below)"
+                value={employeeId}
+                onChange={(v) => {
+                  setEmployeeId(v);
+                  setCandidateId("");
+                }}
+                options={[
+                  { value: "", label: "Choose employee" },
+                  ...employees.map((e) => ({
+                    value: e.id,
+                    label: String(e.data.name),
+                  })),
+                ]}
+              />
+              <NativeSelect
+                label="Candidate"
+                value={candidateId}
+                onChange={(v) => {
+                  setCandidateId(v);
+                  setEmployeeId("");
+                }}
+                options={[
+                  { value: "", label: "Choose candidate" },
+                  ...candidates.map((c) => ({
+                    value: c.id,
+                    label: String(c.data.name),
+                  })),
+                ]}
+              />
+            </>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setSelected(null)}>
               Close
             </Button>
             {!link ? (
-              <Button disabled={busy || !candidateId} onClick={assign}>
+              <Button
+                disabled={busy || (!candidateId && !employeeId)}
+                onClick={assign}
+              >
                 {busy ? (
                   <Loader2 className="animate-spin" />
                 ) : (

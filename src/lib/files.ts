@@ -3,7 +3,7 @@ import { db, transaction } from "./db";
 import { audit } from "./auth";
 import { fail } from "./errors";
 import { visibleRecords } from "./hr";
-import { isStaff, type Actor } from "./types";
+import { type Actor } from "./types";
 export async function extractFile(file: File) {
   const max = Math.min(
     Number(process.env.UPLOAD_MAX_BYTES || 2097152),
@@ -115,11 +115,17 @@ export async function downloadFile(actor: Actor, id: string) {
     )
   ).rows[0];
   if (!file) fail("Attachment not found", 404);
-  if (!isStaff(actor) && file.uploaded_by !== actor.userId) {
+  if (file.uploaded_by !== actor.userId) {
     const records = await visibleRecords(actor);
     if (
       !records.some((r) =>
-        [r.data.receiptId, r.data.resumeFileId, r.data.fileId].includes(id),
+        [
+          r.data.receiptId,
+          r.data.resumeFileId,
+          r.data.fileId,
+          r.data.evidenceId,
+          ...((r.data.audioIds as string[]) || []),
+        ].includes(id),
       )
     )
       fail("Attachment not found", 404);

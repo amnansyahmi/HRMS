@@ -5,19 +5,32 @@ import {
   defaultSettings,
   passwordHash,
   createSession,
+  COOKIE,
+  hashToken,
 } from "./auth";
 import { insertRecord } from "./hr";
 import { fail } from "./errors";
 import type { Actor, Role } from "./types";
+import { cookies } from "next/headers";
 import { localDate } from "./calculations";
-const COMPANY = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const DEMO_EMAIL = (role: Role) => `${role}@demo.nonymauz.invalid`;
+
 export async function demoLogin(role: Role = "owner") {
   if (!demoEnabled()) fail("Demo mode is unavailable on this deployment", 404);
+  const session = (await cookies()).get(COOKIE)?.value;
+  const existing = session
+    ? (
+        await db.query<{ company_id: string }>(
+          "SELECT s.company_id FROM sessions s JOIN companies c ON c.id=s.company_id WHERE s.token_hash=$1 AND s.expires_at>now() AND c.is_demo",
+          [hashToken(session)],
+        )
+      ).rows[0]
+    : null;
+  const COMPANY = existing?.company_id || randomUUID();
+  const DEMO_EMAIL = (role: Role) => `${role}@demo-${COMPANY}.nonymauz.invalid`;
   const hash = await passwordHash(randomUUID() + randomUUID());
   await transaction(async (tx) => {
     await tx.query(
-      "INSERT INTO companies(id,name,slug,settings) VALUES($1,'Nonymauz Studio','nonymauz-studio-demo',$2) ON CONFLICT(id) DO NOTHING",
+      "INSERT INTO companies(id,name,slug,settings,is_demo) VALUES($1,'Nonymauz Studio',$3,$2,true) ON CONFLICT(id) DO NOTHING",
       [
         COMPANY,
         JSON.stringify({
@@ -25,6 +38,7 @@ export async function demoLogin(role: Role = "owner") {
           careersIntro:
             "Good work starts with good people. Build thoughtful digital products with our Kuala Lumpur team.",
         }),
+        "nonymauz-studio-demo-" + COMPANY.slice(0, 8),
       ],
     );
     await tx.query("SELECT id FROM companies WHERE id=$1 FOR UPDATE", [
@@ -89,7 +103,7 @@ export async function demoLogin(role: Role = "owner") {
       const [name, title, department, salary, userRole] = p;
       const email = userRole
         ? DEMO_EMAIL(userRole as Role)
-        : `person${i}@demo.nonymauz.invalid`;
+        : `person${i}@demo-${COMPANY}.nonymauz.invalid`;
       const employee = await insertRecord(tx, actor, "employee", {
         name,
         email,

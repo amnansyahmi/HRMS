@@ -237,14 +237,17 @@ describe("identity and isolation", () => {
     ).rows[0];
     expect(stored.token_hash).toBe(hashToken(invitation.token));
   });
-  it("disables demo access in production and on Vercel", () => {
+  it("allows temporary one-click demo access until explicitly disabled", () => {
     const before = process.env.NODE_ENV;
     process.env.DEMO_MODE = "true";
     vi.stubEnv("NODE_ENV", "production");
-    expect(demoEnabled()).toBe(false);
+    expect(demoEnabled()).toBe(true);
     vi.stubEnv("NODE_ENV", before || "test");
     process.env.VERCEL = "1";
+    expect(demoEnabled()).toBe(true);
+    process.env.DEMO_MODE = "false";
     expect(demoEnabled()).toBe(false);
+    process.env.DEMO_MODE = "true";
     delete process.env.VERCEL;
   });
 });
@@ -649,5 +652,789 @@ describe("shift occurrences", () => {
         shift,
       ]),
     ).toBeNull();
+  });
+});
+
+// Expanded workflows use new profiles so each test has independent balances.
+import { operation, onboarding, saveOnboarding } from "@/lib/operations";
+import { recordPage } from "@/lib/hr";
+import { payrollInputs } from "@/lib/payroll-inputs";
+import { maintenance } from "@/lib/maintenance";
+import {
+  setupMFA,
+  enableMFA,
+  checkMFA,
+  requestAccountToken,
+  consumeAccountToken,
+} from "@/lib/account";
+import { saveAIProposal, confirmAIProposal } from "@/lib/ai-actions";
+import {
+  uploadAudioPart,
+  audioResponse,
+  transcribeMeeting,
+  finishTranscription,
+} from "@/lib/media";
+const freshEmployee = (extra: Record<string, unknown> = {}) =>
+  createRecord(owner, "employee", {
+    data: {
+      ...empData(
+        "Workflow Person",
+        `${randomUUID()}@example.test`,
+        managerEmployee.id,
+      ),
+      ...extra,
+    },
+  });
+const asEmployee = (e: HRRecord): Actor => ({
+  ...employeeActor(),
+  employeeId: e.id,
+  email: String(e.data.email),
+});
+const expense = (date = "2026-09-15", extra: Record<string, unknown> = {}) => ({
+  category: "Travel",
+  date,
+  amount: 30,
+  description: "Client trip",
+  ...extra,
+});
+
+describe("expanded HR workflows", () => {
+  it("automatically prepares hashed employee invitations without granting elevated access", async () => {
+    const e = await freshEmployee();
+    const row = (
+      await db.query<{ role: string; token_hash: string }>(
+        "SELECT role,token_hash FROM invites WHERE employee_id=$1",
+        [e.id],
+      )
+    ).rows[0];
+    expect(row.role).toBe("employee");
+    expect(row.token_hash).toHaveLength(64);
+    const invitation = (e as HRRecord & { invitationUrl: string })
+      .invitationUrl;
+    expect(row.token_hash).toBe(hashToken(invitation.split("/").at(-1)!));
+  });
+  it("computes mileage and enforces monthly limits across concurrent requests", async () => {
+    const e = await freshEmployee(),
+      actor = asEmployee(e);
+    const p = await createRecord(owner, "claim_type", {
+      data: {
+        name: "Mileage",
+        limit: 100,
+        period: "Monthly",
+        receiptRequired: false,
+        mileageRate: 0.5,
+      },
+    });
+    const requests = await Promise.allSettled(
+      [1, 2].map(() =>
+        createRecord(actor, "claim", {
+          data: expense("2026-09-15", {
+            claimTypeId: p.id,
+            mileageKm: 120,
+            amount: 1,
+          }),
+        }),
+      ),
+    );
+    expect(requests.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const claim = requests.find(
+      (r) => r.status === "fulfilled",
+    ) as PromiseFulfilledResult<HRRecord>;
+    expect(claim.value.data.amount).toBe(60);
+    await expect(
+      reviewRequest(actor, { id: claim.value.id, decision: "Approved" }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+  it("requires reporting-manager approval before the HR step", async () => {
+    const e = await freshEmployee(),
+      p = await createRecord(owner, "claim_type", {
+        data: {
+          name: "Two steps",
+          limit: 100,
+          period: "Per request",
+          receiptRequired: false,
+          approval: "Manager then HR",
+        },
+      });
+    const claim = await createRecord(asEmployee(e), "claim", {
+      data: expense("2026-09-15", { claimTypeId: p.id }),
+    });
+    await expect(
+      reviewRequest(owner, { id: claim.id, decision: "Approved" }),
+    ).rejects.toMatchObject({ status: 403 });
+    await reviewRequest(managerActor(), { id: claim.id, decision: "Approved" });
+    expect((await recordById(owner, claim.id)).data).toMatchObject({
+      status: "Pending",
+      approvalStep: 1,
+    });
+    await expect(
+      reviewRequest(managerActor(), { id: claim.id, decision: "Approved" }),
+    ).rejects.toMatchObject({ status: 403 });
+    await reviewRequest(owner, { id: claim.id, decision: "Approved" });
+    expect((await recordById(owner, claim.id)).data.status).toBe("Approved");
+  });
+  it("permits complementary half-days and rejects overlapping hourly leave", async () => {
+    const e = await freshEmployee(),
+      actor = asEmployee(e);
+    const morning = await createRecord(actor, "leave", {
+      data: { ...leaveData("2026-11-16"), unit: "Morning" },
+    });
+    expect(morning.data.days).toBe(0.5);
+    await expect(
+      createRecord(actor, "leave", {
+        data: {
+          ...leaveData("2026-11-16"),
+          unit: "Hours",
+          startHour: 11,
+          hours: 1,
+        },
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    const afternoon = await createRecord(actor, "leave", {
+      data: { ...leaveData("2026-11-16"), unit: "Afternoon" },
+    });
+    expect(afternoon.data.days).toBe(0.5);
+  });
+  it("uses state holidays and carries unused leave only until the policy deadline", async () => {
+    const e = await freshEmployee({
+        state: "Selangor",
+        startDate: "2025-01-01",
+      }),
+      actor = asEmployee(e);
+    await createRecord(owner, "holiday", {
+      data: {
+        title: "Configured state holiday",
+        date: "2026-11-17",
+        state: "Selangor",
+      },
+    });
+    await expect(
+      createRecord(actor, "leave", { data: leaveData("2026-11-17") }),
+    ).rejects.toThrow("no working days");
+    const p = await createRecord(owner, "leave_type", {
+      data: {
+        name: "Carried leave",
+        annualDays: 1,
+        carryDays: 2,
+        carryExpiryMonth: 3,
+      },
+    });
+    const leave = await createRecord(actor, "leave", {
+      data: { ...leaveData("2026-02-02", "2026-02-03"), leaveTypeId: p.id },
+    });
+    expect(leave.data.days).toBe(2);
+    await expect(
+      createRecord(actor, "leave", {
+        data: { ...leaveData("2026-04-06"), leaveTypeId: p.id },
+      }),
+    ).rejects.toThrow("Insufficient");
+  });
+  it("requires onboarding documents and applies only reviewed personal fields", async () => {
+    const e = await freshEmployee(),
+      link = (await operation(owner, "onboarding-link", {
+        employeeId: e.id,
+        data: { requiredDocuments: ["Identity"] },
+      })) as { url: string };
+    const plain = link.url.split("/").at(-1)!;
+    const proposed = {
+      phone: "0123456789",
+      emergencyName: "Contact",
+      emergencyPhone: "0120000000",
+      salary: 99999,
+      role: "owner",
+    };
+    await expect(
+      saveOnboarding(plain, { data: proposed, submit: true }),
+    ).rejects.toThrow("required document");
+    await saveOnboarding(
+      plain,
+      { data: proposed },
+      new File(["Employee identity document"], "identity.txt", {
+        type: "text/plain",
+      }),
+      "Identity",
+    );
+    await saveOnboarding(plain, { data: proposed, submit: true });
+    expect((await recordById(owner, e.id)).data.phone).toBe("");
+    const row = (
+      await db.query<{ id: string; proposed_data: Record<string, unknown> }>(
+        "SELECT id,proposed_data FROM onboarding_links WHERE employee_id=$1",
+        [e.id],
+      )
+    ).rows[0];
+    expect(row.proposed_data.salary).toBeUndefined();
+    const fileId = (row.proposed_data.documents as { fileId: string }[])[0]
+      .fileId;
+    await expect(downloadFile(other, fileId)).rejects.toMatchObject({
+      status: 404,
+    });
+    await operation(owner, "onboarding-review", {
+      id: row.id,
+      data: { decision: "Approved" },
+    });
+    expect((await recordById(owner, e.id)).data).toMatchObject({
+      phone: "0123456789",
+      salary: 4000,
+    });
+    await expect(onboarding(plain)).rejects.toMatchObject({ status: 410 });
+  });
+  it("rolls back a bad employee-import batch atomically", async () => {
+    const email = `${randomUUID()}@example.test`;
+    await expect(
+      operation(owner, "employees-import", {
+        data: { rows: [empData("First", email), empData("Duplicate", email)] },
+      }),
+    ).rejects.toThrow();
+    expect(
+      (
+        await db.query(
+          "SELECT id FROM hr_records WHERE company_id=$1 AND kind='employee' AND data->>'email'=$2",
+          [owner.companyId, email],
+        )
+      ).rows,
+    ).toHaveLength(0);
+  });
+  it("keeps equipment returns and letter issuance inside their workflows", async () => {
+    const e = await freshEmployee(),
+      asset = await createRecord(owner, "asset", {
+        employeeId: e.id,
+        data: { name: "Laptop", serial: "TEST123", issuedDate: "2026-09-01" },
+      });
+    const checklist = await createRecord(owner, "lifecycle", {
+      employeeId: e.id,
+      data: {
+        title: "Exit",
+        type: "Offboarding",
+        dueDate: "2026-10-30",
+        status: "Completed",
+        items: [{ task: "Return laptop", done: false }],
+      },
+    });
+    expect(checklist.data.status).toBe("In progress");
+    await expect(
+      operation(owner, "lifecycle-toggle", {
+        id: checklist.id,
+        data: { index: 0 },
+      }),
+    ).rejects.toThrow("equipment returns");
+    await updateRecord(owner, "asset", asset.id, {
+      updatedAt: asset.updated_at,
+      data: { returnedDate: "2026-10-08", condition: "Returned" },
+    });
+    await operation(owner, "lifecycle-toggle", {
+      id: checklist.id,
+      data: { index: 0 },
+    });
+    expect((await recordById(owner, checklist.id)).data.status).toBe(
+      "Completed",
+    );
+    const letter = await createRecord(owner, "letter", {
+      employeeId: e.id,
+      data: {
+        title: "Confirmation",
+        type: "Confirmation",
+        effectiveDate: "2026-10-08",
+        body: "Confirmed appointment",
+        status: "Issued",
+      },
+    });
+    expect(letter.data.status).toBe("Draft");
+    await operation(owner, "letter-issue", { id: letter.id });
+    const issued = await recordById(owner, letter.id);
+    await expect(
+      updateRecord(owner, "letter", letter.id, {
+        updatedAt: issued.updated_at,
+        data: { body: "Changed" },
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+  it("hires a candidate once and carries their recruitment attachment to onboarding", async () => {
+    const activeJob = await createRecord(owner, "job", {
+      data: { ...job.data, status: "Published" },
+    });
+    const file = await uploadFile(
+      owner,
+      new File(["Candidate CV React developer"], "resume.txt", {
+        type: "text/plain",
+      }),
+    );
+    const candidate = await createRecord(owner, "candidate", {
+      data: {
+        name: "New Hire",
+        email: `${randomUUID()}@example.test`,
+        jobId: activeJob.id,
+        stage: "Offer",
+        resume: "React developer",
+        resumeFileId: file.id,
+        consent: true,
+      },
+    });
+    const result = (await operation(owner, "candidate-hire", {
+      id: candidate.id,
+      data: { startDate: "2026-11-01", salary: 4500 },
+    })) as { employeeId: string };
+    const second = await operation(owner, "candidate-hire", {
+      id: candidate.id,
+      data: { startDate: "2026-11-01", salary: 9000 },
+    });
+    expect(second).toEqual(result);
+    expect((await recordById(owner, result.employeeId)).data).toMatchObject({
+      status: "Onboarding",
+      salary: 4500,
+    });
+    expect(
+      (await visibleRecords(owner)).filter(
+        (r) => r.employee_id === result.employeeId && r.kind === "document",
+      )[0].data.fileId,
+    ).toBe(file.id);
+  });
+  it("preserves evaluation criteria snapshots and weighted historical scores", async () => {
+    const e = await freshEmployee(),
+      cycle = await createRecord(owner, "review_cycle", {
+        data: {
+          title: "2026 review",
+          startDate: "2026-01-01",
+          endDate: "2026-12-31",
+        },
+      });
+    const template = await createRecord(owner, "evaluation_template", {
+      data: {
+        title: "Quarterly",
+        criteria: [
+          { title: "Delivery", weight: 75 },
+          { title: "Teamwork", weight: 25 },
+        ],
+      },
+    });
+    const evaluation = await createRecord(owner, "evaluation", {
+      employeeId: e.id,
+      data: { cycleId: cycle.id, templateId: template.id },
+    });
+    await updateRecord(owner, "evaluation_template", template.id, {
+      updatedAt: template.updated_at,
+      data: { criteria: [{ title: "New criterion", weight: 100 }] },
+    });
+    await operation(asEmployee(e), "evaluation-submit", {
+      id: evaluation.id,
+      data: { selfComments: "Delivered release" },
+    });
+    await expect(
+      operation(asEmployee(e), "evaluation-review", {
+        id: evaluation.id,
+        data: { ratings: [4, 2] },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(
+      await operation(owner, "evaluation-review", {
+        id: evaluation.id,
+        data: { ratings: [4, 2], feedback: "Good delivery" },
+      }),
+    ).toEqual({ score: 3.5 });
+    const final = await recordById(owner, evaluation.id);
+    expect(
+      (final.data.templateSnapshot as { criteria: unknown[] }).criteria,
+    ).toHaveLength(2);
+    await expect(
+      operation(owner, "evaluation-review", {
+        id: evaluation.id,
+        data: { ratings: [5, 5] },
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+  it("prevents duplicate payment vouchers and records a real transfer reference", async () => {
+    const e = await freshEmployee(),
+      claim = await createRecord(asEmployee(e), "claim", { data: expense() });
+    await reviewRequest(owner, { id: claim.id, decision: "Approved" });
+    await expect(
+      operation(owner, "voucher-prepare", {
+        id: claim.id,
+        data: { recordIds: [claim.id, claim.id] },
+      }),
+    ).rejects.toThrow();
+    const voucher = (await operation(owner, "voucher-prepare", {
+      id: claim.id,
+    })) as HRRecord;
+    expect(voucher.data.amount).toBe(30);
+    await expect(
+      operation(owner, "voucher-prepare", { id: claim.id }),
+    ).rejects.toThrow("unpaid approved");
+    await expect(
+      reviewRequest(owner, { id: claim.id, decision: "Paid" }),
+    ).rejects.toMatchObject({ status: 409 });
+    await operation(owner, "voucher-pay", {
+      id: voucher.id,
+      data: { bankReference: "TEST-TRANSFER-001" },
+    });
+    expect((await recordById(owner, claim.id)).data.status).toBe("Paid");
+  });
+  it("uses effective salary changes for historical payroll instead of current salary", async () => {
+    const e = await freshEmployee({ overtimeEligible: true });
+    await operation(owner, "employment-change", {
+      id: e.id,
+      data: {
+        title: "Senior Engineer",
+        effectiveDate: "2026-09-16",
+        newSalary: 6000,
+      },
+    });
+    const updated = await recordById(owner, e.id),
+      records = await visibleRecords(owner);
+    expect(updated.data.salary).toBe(6000);
+    expect(
+      payrollInputs(updated, "2026-08", records, [1, 2, 3, 4, 5], []).base,
+    ).toBe(4000);
+    expect(
+      payrollInputs(updated, "2026-09", records, [1, 2, 3, 4, 5], []).base,
+    ).toBe(5000);
+  });
+  it("applies scheduled employment changes only when due and only once", async () => {
+    const e = await freshEmployee();
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kuala_Lumpur",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const tomorrow = new Date(Date.parse(today) + 86400000)
+      .toISOString()
+      .slice(0, 10);
+    await operation(owner, "employment-change", {
+      id: e.id,
+      data: {
+        title: "Lead Engineer",
+        effectiveDate: tomorrow,
+        newSalary: 6500,
+      },
+    });
+    await maintenance();
+    expect((await recordById(owner, e.id)).data.salary).toBe(4000);
+    await db.query(
+      "UPDATE hr_records SET data=jsonb_set(data,'{effectiveDate}',to_jsonb($1::text)) WHERE company_id=$2 AND employee_id=$3 AND kind='job_history'",
+      [today, owner.companyId, e.id],
+    );
+    await maintenance();
+    await maintenance();
+    expect((await recordById(owner, e.id)).data).toMatchObject({
+      salary: 6500,
+      title: "Lead Engineer",
+    });
+    expect(
+      (
+        await db.query(
+          "SELECT id FROM audit_log WHERE entity_id=$1 AND action='Applied scheduled employment change'",
+          [e.id],
+        )
+      ).rows,
+    ).toHaveLength(1);
+  });
+  it("uses configured overtime rates and excludes already linked overtime", async () => {
+    const e = await freshEmployee({ overtimeEligible: true });
+    const overtime = {
+      ...e,
+      id: randomUUID(),
+      employee_id: e.id,
+      kind: "overtime",
+      data: {
+        date: "2026-08-04",
+        status: "Approved",
+        type: "Normal",
+        hours: 2,
+      },
+    } as HRRecord;
+    const totals = payrollInputs(
+      e,
+      "2026-08",
+      [overtime],
+      [1, 2, 3, 4, 5],
+      [],
+      { Normal: 2 },
+    );
+    expect(totals.overtime).toBe(76.92);
+    expect(totals.inputRecordIds).toContain(overtime.id);
+    expect(
+      payrollInputs(
+        e,
+        "2026-08",
+        [{ ...overtime, data: { ...overtime.data, payrollId: randomUUID() } }],
+        [1, 2, 3, 4, 5],
+        [],
+      ).overtime,
+    ).toBe(0);
+    expect(() =>
+      payrollInputs(e, "2026-08", [overtime], [1, 2, 3, 4, 5], [], {
+        Normal: 0,
+      }),
+    ).toThrow("Configure a valid overtime rate");
+  });
+  it("checks geofence accuracy and rejects another company's workplace", async () => {
+    const e = await freshEmployee(),
+      location = await createRecord(owner, "location", {
+        data: {
+          name: "KL office",
+          geofence: true,
+          latitude: 3.14,
+          longitude: 101.69,
+          radius: 200,
+        },
+      });
+    await expect(
+      clock(asEmployee(e), { action: "in", locationId: location.id }),
+    ).rejects.toThrow("phone location");
+    await expect(
+      clock(asEmployee(e), {
+        action: "in",
+        locationId: location.id,
+        coordinates: { latitude: 3.14, longitude: 101.69, accuracy: 500 },
+      }),
+    ).rejects.toThrow("accuracy");
+    await expect(
+      clock(
+        { ...asEmployee(e), companyId: other.companyId },
+        { action: "in", locationId: location.id },
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    await clock(asEmployee(e), {
+      action: "in",
+      locationId: location.id,
+      coordinates: { latitude: 3.14, longitude: 101.69, accuracy: 10 },
+    });
+    await clock(asEmployee(e), { action: "out" });
+  });
+  it("imports private calendar events idempotently and rejects recurring exports", async () => {
+    const calendar =
+      "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:test-meeting-1\r\nSUMMARY:Team review\r\nDTSTART;TZID=Asia/Kuala_Lumpur:20261110T090000\r\nDTEND;TZID=Asia/Kuala_Lumpur:20261110T100000\r\nEND:VEVENT\r\nEND:VCALENDAR";
+    expect(
+      await operation(owner, "calendar-import", { data: { calendar } }),
+    ).toEqual({ created: 1 });
+    expect(
+      await operation(owner, "calendar-import", { data: { calendar } }),
+    ).toEqual({ created: 0 });
+    const meeting = (await visibleRecords(owner)).find(
+      (r) => r.data.calendarUID === "test-meeting-1",
+    )!;
+    expect(meeting.data.calendarStartsAt).toBe("2026-11-10T01:00:00.000Z");
+    expect(
+      (await visibleRecords({ ...employeeActor(), role: "hr" })).some(
+        (r) => r.id === meeting.id,
+      ),
+    ).toBe(false);
+    await expect(
+      operation(owner, "calendar-import", {
+        data: {
+          calendar: calendar.replace(
+            "SUMMARY:",
+            "RRULE:FREQ=WEEKLY\r\nSUMMARY:",
+          ),
+        },
+      }),
+    ).rejects.toThrow("individual occurrences");
+  });
+  it("rejects cyclic goals and hides team goals from other departments", async () => {
+    const team = await createRecord(owner, "department", {
+        data: { name: "Team A" },
+      }),
+      e = await freshEmployee({ departmentId: team.id });
+    const company = await createRecord(owner, "goal", {
+      data: {
+        scope: "Company",
+        title: "Company objective",
+        target: 10,
+        dueDate: "2026-12-01",
+      },
+    });
+    const goal = await createRecord(owner, "goal", {
+      data: {
+        scope: "Team",
+        departmentId: team.id,
+        parentId: company.id,
+        title: "Team objective",
+        target: 5,
+        dueDate: "2026-12-01",
+      },
+    });
+    expect(goal.employee_id).toBeNull();
+    expect(
+      (await visibleRecords(asEmployee(e))).some((r) => r.id === goal.id),
+    ).toBe(true);
+    expect(
+      (await visibleRecords(employeeActor())).some((r) => r.id === goal.id),
+    ).toBe(false);
+    await expect(
+      updateRecord(owner, "goal", company.id, {
+        updatedAt: company.updated_at,
+        data: { parentId: goal.id },
+      }),
+    ).rejects.toThrow("cycle");
+  });
+  it("stores an AI proposal without mutating records, then checks actor, confirmation and replay", async () => {
+    const e = await freshEmployee(),
+      claim = await createRecord(asEmployee(e), "claim", { data: expense() });
+    await db.query(
+      "UPDATE companies SET settings=jsonb_set(jsonb_set(settings,'{aiEnabled}','true'),'{aiActionsEnabled}','true') WHERE id=$1",
+      [owner.companyId],
+    );
+    const proposal = await saveAIProposal(
+      owner,
+      "Confirm this request.\n```hr-action\n" +
+        JSON.stringify({
+          action: "review",
+          recordId: claim.id,
+          data: { decision: "Approved" },
+          label: "Approve claim",
+        }) +
+        "\n```",
+      [claim],
+    );
+    expect((await recordById(owner, claim.id)).data.status).toBe("Pending");
+    await expect(
+      confirmAIProposal(other, { id: proposal.cards[0].id }),
+    ).rejects.toMatchObject({ status: 403 });
+    await confirmAIProposal(owner, { id: proposal.cards[0].id });
+    expect((await recordById(owner, claim.id)).data.status).toBe("Approved");
+    await expect(
+      confirmAIProposal(owner, { id: proposal.cards[0].id }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+  it("keeps audio chunks private and authorizes a one-use transcription callback", async () => {
+    const meeting = await createRecord(owner, "meeting", {
+      data: { title: "Private audio", date: "2026-10-08", transcript: "" },
+    });
+    const bytes = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0, 1, 2, 3, 4, 5]);
+    const upload = await uploadAudioPart(
+      owner,
+      {
+        meetingId: meeting.id,
+        filename: "test.webm",
+        part: 0,
+        total: 1,
+        duration: 5,
+      },
+      bytes,
+    );
+    const response = await audioResponse(upload.uploadId, owner, "bytes=2-5");
+    expect(response.status).toBe(206);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(
+      bytes.subarray(2, 6),
+    );
+    await expect(
+      audioResponse(upload.uploadId, employeeActor(), null),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      transcribeMeeting(owner, { id: meeting.id }),
+    ).rejects.toMatchObject({ status: 503 });
+    const plain = "a".repeat(64),
+      jobId = randomUUID();
+    await db.query(
+      "INSERT INTO media_jobs(id,company_id,meeting_id,callback_hash,audio_ids) VALUES($1,$2,$3,$4,'[]')",
+      [jobId, owner.companyId, meeting.id, hashToken(plain)],
+    );
+    await expect(
+      finishTranscription(jobId, "b".repeat(64), {
+        status: "Complete",
+        segments: [],
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await finishTranscription(jobId, plain, {
+      status: "Complete",
+      segments: [
+        { start: 0, end: 3, speaker: "Speaker 1", text: "Hello team" },
+      ],
+    });
+    expect((await recordById(owner, meeting.id)).data.transcript).toContain(
+      "Hello team",
+    );
+    await expect(
+      finishTranscription(jobId, plain, { status: "Complete", segments: [] }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+  it("enables encrypted MFA, revokes other sessions and consumes recovery codes once", async () => {
+    process.env.AUTH_ENCRYPTION_KEY = "12".repeat(32);
+    await createSession(owner.userId, owner.companyId);
+    await createSession(owner.userId, owner.companyId);
+    const setup = await setupMFA(owner),
+      otp = await import("otplib"),
+      code = await otp.generate({ secret: setup.secret });
+    const result = await enableMFA(owner, { code });
+    expect(result.recoveryCodes).toHaveLength(10);
+    const stored = (
+      await db.query<{ secret: string }>(
+        "SELECT secret FROM user_mfa WHERE user_id=$1",
+        [owner.userId],
+      )
+    ).rows[0];
+    expect(stored.secret).not.toContain(setup.secret);
+    expect(
+      (
+        await db.query("SELECT token_hash FROM sessions WHERE user_id=$1", [
+          owner.userId,
+        ])
+      ).rows,
+    ).toHaveLength(1);
+    await expect(checkMFA(owner.userId, code)).rejects.toMatchObject({
+      status: 401,
+    });
+    await checkMFA(owner.userId, result.recoveryCodes[0]);
+    await expect(
+      checkMFA(owner.userId, result.recoveryCodes[0]),
+    ).rejects.toMatchObject({ status: 401 });
+  });
+  it("returns generic password-reset responses and revokes sessions after one-use reset", async () => {
+    const result = await requestAccountToken({ email: owner.email }, "reset");
+    const missing = await requestAccountToken(
+      { email: "missing@example.test" },
+      "reset",
+    );
+    expect(missing).toEqual(result);
+    const mail = (
+      await db.query<{ body: string }>(
+        "SELECT body FROM email_outbox WHERE recipient=$1 AND subject LIKE 'Reset%' ORDER BY created_at DESC LIMIT 1",
+        [owner.email],
+      )
+    ).rows[0];
+    const plain = mail.body.split("/account/reset/")[1].trim();
+    expect(
+      (
+        await db.query<{ token_hash: string }>(
+          "SELECT token_hash FROM account_tokens WHERE user_id=$1",
+          [owner.userId],
+        )
+      ).rows[0].token_hash,
+    ).toBe(hashToken(plain));
+    await consumeAccountToken(
+      { token: plain, password: "new-owner-password-123" },
+      "reset",
+    );
+    expect(
+      (
+        await db.query("SELECT token_hash FROM sessions WHERE user_id=$1", [
+          owner.userId,
+        ])
+      ).rows,
+    ).toHaveLength(0);
+    await expect(
+      consumeAccountToken(
+        { token: plain, password: "another-password-123" },
+        "reset",
+      ),
+    ).rejects.toMatchObject({ status: 410 });
+  });
+  it("paginates all records without exposing another tenant or truncating older data", async () => {
+    const seed = randomUUID();
+    await db.query(
+      "INSERT INTO hr_records(id,company_id,kind,data) SELECT gen_random_uuid(),$1,'policy',jsonb_build_object('title',$2::text || i::text,'body','Test policy','category','General') FROM generate_series(1,510) i",
+      [owner.companyId, seed],
+    );
+    let page = await recordPage(owner);
+    const records = [...page.records];
+    expect(page.nextCursor).not.toBeNull();
+    while (page.nextCursor) {
+      page = await recordPage(owner, page.nextCursor);
+      records.push(...page.records);
+    }
+    expect(new Set(records.map((r) => r.id)).size).toBe(records.length);
+    expect(
+      records.filter((r) => String(r.data.title).startsWith(seed)),
+    ).toHaveLength(510);
+    expect(records.every((r) => r.company_id === owner.companyId)).toBe(true);
   });
 });

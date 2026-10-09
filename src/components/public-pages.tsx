@@ -27,6 +27,7 @@ type Job = {
     requirements: string;
     location: string;
     employmentType: string;
+    screeningQuestions?: string[];
   };
 };
 function PublicFrame({
@@ -75,7 +76,20 @@ export function CareersPage({ slug }: { slug: string }) {
     const fields = Object.fromEntries(new FormData(event.currentTarget));
     try {
       const form = new FormData();
-      form.set("data", JSON.stringify({ ...fields, jobId: job.id, consent }));
+      form.set(
+        "data",
+        JSON.stringify({
+          ...fields,
+          jobId: job.id,
+          consent,
+          screeningAnswers: (
+            (job.data.screeningQuestions as string[]) || []
+          ).map((question, i) => ({
+            question,
+            answer: String(fields[`screening-${i}`] || ""),
+          })),
+        }),
+      );
       if (file) form.set("file", file);
       await api(`/api/careers/${slug}`, form);
       setSubmitted(true);
@@ -219,6 +233,19 @@ export function CareersPage({ slug }: { slug: string }) {
                   </label>
                 </div>
                 <div className="form-field full">
+                  {((job?.data.screeningQuestions as string[]) || []).map(
+                    (question, i) => (
+                      <div key={i}>
+                        <Label htmlFor={`screening-${i}`}>{question}</Label>
+                        <Textarea
+                          id={`screening-${i}`}
+                          name={`screening-${i}`}
+                          required
+                          maxLength={2000}
+                        />
+                      </div>
+                    ),
+                  )}
                   <Label htmlFor="apply-resume">Experience / resume text</Label>
                   <Textarea
                     id="apply-resume"

@@ -11,6 +11,8 @@ export async function api<T = Record<string, unknown>>(
   body?: unknown,
   method = body === undefined ? "GET" : "POST",
 ): Promise<T> {
+  if (method !== "GET" && typeof navigator !== "undefined" && !navigator.onLine)
+    throw new ApiError("You’re offline. Reconnect before submitting.", 503);
   const response = await fetch(url, {
     method,
     headers:

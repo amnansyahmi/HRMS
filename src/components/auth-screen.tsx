@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useState } from "react";
 import { ArrowRight, Loader2, Users, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,8 @@ export function AuthScreen({
   onSuccess: () => Promise<void>;
 }) {
   const [signup, setSignup] = useState(false),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [realLogin, setRealLogin] = useState(!demo);
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -57,53 +59,88 @@ export function AuthScreen({
             ? "Create your company workspace. Bring the team together."
             : "Your people, everyday work and hiring. All in one place."}
         </p>
-        <form onSubmit={submit} className="auth-form">
-          {signup ? (
-            <>
+        {!realLogin ? (
+          <div className="demo-entry main-demo-entry">
+            <Button className="w-full" disabled={busy} onClick={enterDemo}>
+              {busy ? <Loader2 className="animate-spin" /> : null}Log in
+              <ArrowRight size={16} />
+            </Button>
+            <small>Temporary demo access. No password needed.</small>
+            <button className="auth-switch" onClick={() => setRealLogin(true)}>
+              Use a real workspace
+            </button>
+          </div>
+        ) : (
+          <>
+            <form onSubmit={submit} className="auth-form">
+              {signup ? (
+                <>
+                  <div>
+                    <Label htmlFor="name">Your name</Label>
+                    <Input id="name" name="name" autoComplete="name" required />
+                  </div>
+                  <div>
+                    <Label htmlFor="company">Company name</Label>
+                    <Input id="company" name="company" required />
+                  </div>
+                </>
+              ) : null}
               <div>
-                <Label htmlFor="name">Your name</Label>
-                <Input id="name" name="name" autoComplete="name" required />
+                <Label htmlFor="email">Work email</Label>
+                <Input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                />
               </div>
               <div>
-                <Label htmlFor="company">Company name</Label>
-                <Input id="company" name="company" required />
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  name="password"
+                  type="password"
+                  minLength={signup ? 12 : 1}
+                  autoComplete={signup ? "new-password" : "current-password"}
+                  required
+                />
+                {signup ? <small>At least 12 characters.</small> : null}
               </div>
-            </>
-          ) : null}
-          <div>
-            <Label htmlFor="email">Work email</Label>
-            <Input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-            />
-          </div>
-          <div>
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              name="password"
-              type="password"
-              minLength={signup ? 12 : 1}
-              autoComplete={signup ? "new-password" : "current-password"}
-              required
-            />
-            {signup ? <small>At least 12 characters.</small> : null}
-          </div>
-          <Button disabled={busy} type="submit" className="w-full">
-            {busy ? <Loader2 className="animate-spin" /> : null}
-            {signup ? "Create workspace" : "Sign in"}
-            <ArrowRight size={16} />
-          </Button>
-        </form>
-        <button className="auth-switch" onClick={() => setSignup((v) => !v)}>
-          {signup
-            ? "Already have an account? Sign in"
-            : "New here? Create a workspace"}
-        </button>
-        {demo ? (
+              {!signup ? (
+                <>
+                  <div>
+                    <Label htmlFor="login-code">
+                      Authenticator / recovery code (if enabled)
+                    </Label>
+                    <Input
+                      id="login-code"
+                      name="code"
+                      autoComplete="one-time-code"
+                    />
+                  </div>
+                  <Link className="inline-link" href="/account/forgot">
+                    Forgot password?
+                  </Link>
+                </>
+              ) : null}
+              <Button disabled={busy} type="submit" className="w-full">
+                {busy ? <Loader2 className="animate-spin" /> : null}
+                {signup ? "Create workspace" : "Sign in"}
+                <ArrowRight size={16} />
+              </Button>
+            </form>
+            <button
+              className="auth-switch"
+              onClick={() => setSignup((v) => !v)}
+            >
+              {signup
+                ? "Already have an account? Sign in"
+                : "New here? Create a workspace"}
+            </button>
+          </>
+        )}
+        {demo && realLogin ? (
           <div className="demo-entry">
             <span>Take a look around</span>
             <Button
@@ -112,7 +149,7 @@ export function AuthScreen({
               disabled={busy}
               onClick={enterDemo}
             >
-              Explore the demo workspace
+              Log in to demo
             </Button>
             <small>Sample records only. No real employee data.</small>
           </div>

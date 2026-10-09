@@ -1,12 +1,17 @@
 import { getActor, assertOrigin } from "@/lib/auth";
 import {
   clock,
+  recalculatePayroll,
   reviewRequest,
   generatePayroll,
   publishPayroll,
 } from "@/lib/hr";
-import { inviteAssessment } from "@/lib/recruitment";
-import { handle, fail } from "@/lib/errors";
+import { ocrReceipt } from "@/lib/ocr";
+import { transcribeMeeting } from "@/lib/media";
+import { confirmAIProposal } from "@/lib/ai-actions";
+import { operation } from "@/lib/operations";
+import { inviteAssessment, createProfileTemplate } from "@/lib/recruitment";
+import { handle } from "@/lib/errors";
 import { jsonBody } from "@/lib/request";
 export const runtime = "nodejs";
 export async function POST(
@@ -18,15 +23,25 @@ export async function POST(
     const actor = await getActor(),
       body = await jsonBody(request),
       { action } = await params;
+    if (action === "receipt-ocr")
+      return Response.json(await ocrReceipt(actor, body));
+    if (action === "meeting-transcribe")
+      return Response.json(await transcribeMeeting(actor, body));
+    if (action === "ai-confirm")
+      return Response.json(await confirmAIProposal(actor, body));
     if (action === "clock") return Response.json(await clock(actor, body));
     if (action === "review")
       return Response.json(await reviewRequest(actor, body));
     if (action === "payroll-generate")
       return Response.json(await generatePayroll(actor, body));
+    if (action === "payroll-calculate")
+      return Response.json(await recalculatePayroll(actor, body));
     if (action === "payroll-publish")
       return Response.json(await publishPayroll(actor, body));
+    if (action === "profile-template")
+      return Response.json(await createProfileTemplate(actor, body));
     if (action === "assessment-invite")
       return Response.json(await inviteAssessment(actor, body));
-    fail("Action not found", 404);
+    return Response.json(await operation(actor, action, body));
   });
 }

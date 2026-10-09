@@ -11,7 +11,15 @@ export async function GET(request: Request) {
     if (!isStaff(actor)) fail("Only HR can export company records", 403);
     const url = new URL(request.url),
       type = z
-        .enum(["employees", "payroll", "EA", "CP22", "CP22A"])
+        .enum([
+          "employees",
+          "payroll",
+          "EA",
+          "CP22",
+          "CP22A",
+          "voucher",
+          "claims",
+        ])
         .parse(url.searchParams.get("type"));
     const company = await getCompany(actor),
       year = z.coerce
@@ -28,7 +36,76 @@ export async function GET(request: Request) {
     ).rows;
     let rows: (string | number | null | undefined)[][] = [],
       filename = type;
-    if (type === "employees")
+    if (type === "voucher") {
+      const id = z.uuid().parse(url.searchParams.get("id"));
+      const voucher = (
+        await db.query<HRRecord>(
+          "SELECT * FROM hr_records WHERE company_id=$1 AND id=$2 AND kind='payment_voucher'",
+          [actor.companyId, id],
+        )
+      ).rows[0];
+      if (!voucher) fail("Voucher unavailable", 404);
+      const records = (
+        await db.query<HRRecord>(
+          "SELECT * FROM hr_records WHERE company_id=$1 AND id=ANY($2::uuid[])",
+          [actor.companyId, voucher.data.recordIds],
+        )
+      ).rows;
+      rows = [
+        [
+          "Voucher",
+          "Employee",
+          "Bank",
+          "Account",
+          "Amount MYR",
+          "Reference",
+          "Status",
+        ],
+        ...records.map((r) => {
+          const employee = employees.find((e) => e.id === r.employee_id);
+          return [
+            String(voucher.data.reference),
+            String(employee?.data.name || r.data.employeeName || ""),
+            String(r.data.bankName || employee?.data.bankName || ""),
+            String(r.data.bankAccount || employee?.data.bankAccount || ""),
+            Number(r.kind === "payroll" ? r.data.net : r.data.amount),
+            String(voucher.data.bankReference || ""),
+            String(voucher.data.status),
+          ];
+        }),
+      ];
+      filename += "-" + String(voucher.data.reference);
+    } else if (type === "claims") {
+      const claims = (
+        await db.query<HRRecord>(
+          "SELECT * FROM hr_records WHERE company_id=$1 AND kind='claim' AND substring(data->>'date',1,4)=$2 ORDER BY data->>'date'",
+          [actor.companyId, String(year)],
+        )
+      ).rows;
+      rows = [
+        [
+          "Date",
+          "Employee",
+          "Type",
+          "Amount MYR",
+          "Status",
+          "Payroll ID",
+          "Voucher ID",
+        ],
+        ...claims.map((r) => [
+          String(r.data.date),
+          String(
+            employees.find((e) => e.id === r.employee_id)?.data.name || "",
+          ),
+          String(r.data.category),
+          Number(r.data.amount),
+          String(r.data.status),
+          String(r.data.payrollId || ""),
+          String(r.data.voucherId || ""),
+        ]),
+      ];
+      filename += "-" + year;
+    } else if (type === "employees")
       rows = [
         [
           "Name",

@@ -1,6 +1,10 @@
 "use client";
+import { leaveEntitlement } from "@/lib/leave-entitlement";
+import { toast } from "sonner";
+import { ShiftRoster } from "./shift-roster";
 import { useState } from "react";
 import {
+  Receipt,
   Clock3,
   Pencil,
   Check,
@@ -39,6 +43,7 @@ export function AttendancePage() {
     [tab, setTab] = useState("attendance"),
     [search, setSearch] = useState(""),
     [location, setLocation] = useState("Office"),
+    [locationId, setLocationId] = useState(""),
     [busy, setBusy] = useState(false),
     staff = isStaff(workspace.actor),
     employees = workspace.records.filter((r) => r.kind === "employee"),
@@ -74,9 +79,35 @@ export function AttendancePage() {
     try {
       await act(
         "clock",
-        { action: open ? "out" : "in", location },
+        {
+          action: open ? "out" : "in",
+          location,
+          locationId: locationId || null,
+          coordinates:
+            !open &&
+            workspace.records.find((r) => r.id === locationId)?.data.geofence
+              ? await new Promise<{
+                  latitude: number;
+                  longitude: number;
+                  accuracy: number;
+                }>((resolve, reject) =>
+                  navigator.geolocation.getCurrentPosition(
+                    (p) =>
+                      resolve({
+                        latitude: p.coords.latitude,
+                        longitude: p.coords.longitude,
+                        accuracy: p.coords.accuracy,
+                      }),
+                    (e) => reject(new Error(e.message)),
+                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+                  ),
+                )
+              : null,
+        },
         open ? "Clocked out" : "Clocked in",
       );
+    } catch (e) {
+      toast.error((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -108,6 +139,19 @@ export function AttendancePage() {
             </p>
           </div>
           <div className="clock-actions">
+            {!open && workspace.records.some((r) => r.kind === "location") ? (
+              <NativeSelect
+                label="Named workplace"
+                value={locationId}
+                onChange={setLocationId}
+                options={[
+                  { value: "", label: "Choose workplace" },
+                  ...workspace.records
+                    .filter((r) => r.kind === "location")
+                    .map((r) => ({ value: r.id, label: String(r.data.name) })),
+                ]}
+              />
+            ) : null}
             {!open ? (
               <NativeSelect
                 label="Work location"
@@ -135,7 +179,11 @@ export function AttendancePage() {
         <TabsList>
           <TabsTrigger value="attendance">Attendance</TabsTrigger>
           <TabsTrigger value="shifts">Shifts</TabsTrigger>
+          <TabsTrigger value="roster">Roster</TabsTrigger>
         </TabsList>
+        <TabsContent value="roster">
+          <ShiftRoster />
+        </TabsContent>
         <TabsContent value="attendance">
           <div className="table-toolbar">
             <SearchField
@@ -279,21 +327,25 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
           .toLowerCase()
           .includes(search.toLowerCase()),
     );
-  const balance = (type: string) => {
-    const allowance = Number(
-        own?.data[type === "Annual" ? "annualLeave" : "sickLeave"] || 0,
-      ),
-      used = all
-        .filter(
-          (r) =>
-            r.employee_id === own?.id &&
-            r.data.type === type &&
-            ["Pending", "Approved"].includes(String(r.data.status)) &&
-            String(r.data.startDate).startsWith(String(year)),
-        )
-        .reduce((n, r) => n + Number(r.data.days), 0);
-    return { allowance, available: allowance - used };
-  };
+  const [balanceDate] = useState(() =>
+    localDate(new Date(), workspace.company.settings.timezone),
+  );
+  const leavePolicies = workspace.records.filter(
+    (r) =>
+      r.kind === "leave_type" &&
+      (!r.data.departmentId || r.data.departmentId === own?.data.departmentId),
+  );
+  const balance = (type: string) =>
+    own
+      ? leaveEntitlement(
+          own,
+          leavePolicies.find((p) => p.data.name === type) || null,
+          type,
+          balanceDate,
+          balanceDate,
+          all,
+        ) || { allowance: 0, available: 0 }
+      : { allowance: 0, available: 0 };
   async function decide() {
     if (!review) return;
     setBusy(true);
@@ -325,9 +377,52 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
           ) : null
         }
       />
+      {kind === "claim" && staff ? (
+        <div className="table-toolbar">
+          <Button size="sm" variant="outline" asChild>
+            <a href={`/api/export?type=claims&year=${year}`}>
+              Year-to-date claims CSV
+            </a>
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const claims = workspace.records.filter(
+                (r) =>
+                  r.kind === "claim" &&
+                  r.data.status === "Approved" &&
+                  !r.data.payrollId &&
+                  !r.data.voucherId,
+              );
+              if (!claims.length)
+                return toast.error("No unpaid approved claims");
+              void act(
+                "voucher-prepare",
+                {
+                  id: claims[0].id,
+                  data: {
+                    recordIds: claims.map((r) => r.id),
+                    title: "Claim reimbursements",
+                  },
+                },
+                "Voucher prepared",
+              );
+            }}
+          >
+            Prepare reimbursement voucher
+          </Button>
+        </div>
+      ) : null}
       {kind === "leave" && own ? (
         <div className="leave-balances">
-          {["Annual", "Sick"].map((type) => {
+          {[
+            ...new Set([
+              "Annual",
+              "Sick",
+              ...leavePolicies.map((p) => String(p.data.name)),
+            ]),
+          ].map((type) => {
             const b = balance(type);
             return (
               <div key={type}>
@@ -346,6 +441,53 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
               </div>
             );
           })}
+        </div>
+      ) : null}
+      {kind === "claim" && own ? (
+        <div className="leave-balances">
+          {workspace.records
+            .filter(
+              (r) =>
+                r.kind === "claim_type" &&
+                (!r.data.departmentId ||
+                  r.data.departmentId === own.data.departmentId),
+            )
+            .map((policy) => {
+              const period = policy.data.period,
+                prefix =
+                  period === "Annual"
+                    ? balanceDate.slice(0, 4)
+                    : balanceDate.slice(0, 7),
+                used =
+                  period === "Per request"
+                    ? 0
+                    : all
+                        .filter(
+                          (r) =>
+                            r.employee_id === own.id &&
+                            r.data.claimTypeId === policy.id &&
+                            ["Pending", "Approved", "Paid"].includes(
+                              String(r.data.status),
+                            ) &&
+                            String(r.data.date).startsWith(prefix),
+                        )
+                        .reduce((n, r) => n + Number(r.data.amount), 0);
+              return (
+                <div key={policy.id}>
+                  <Receipt size={18} />
+                  <div>
+                    <small>
+                      {String(policy.data.name)} · {String(period)}
+                    </small>
+                    <strong>
+                      {money(Math.max(0, Number(policy.data.limit) - used))}{" "}
+                      available
+                    </strong>
+                    <p>Pending claims reserve balance</p>
+                  </div>
+                </div>
+              );
+            })}
         </div>
       ) : null}
       {kind === "claim" ? (

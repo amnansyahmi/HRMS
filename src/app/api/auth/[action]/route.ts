@@ -1,3 +1,10 @@
+import {
+  requestAccountToken,
+  consumeAccountToken,
+  setupMFA,
+  enableMFA,
+  disableMFA,
+} from "@/lib/account";
 import { z } from "zod";
 import { cookies } from "next/headers";
 import {
@@ -30,6 +37,27 @@ export async function POST(
       return Response.json({ ok: true });
     }
     const body = await jsonBody(request);
+    if (action === "forgot")
+      return Response.json(await requestAccountToken(body, "reset"));
+    if (action === "reset" || action === "verify")
+      return Response.json(
+        await consumeAccountToken(
+          body,
+          action === "reset" ? "reset" : "verify",
+        ),
+      );
+    if (action === "request-verification") {
+      const actor = await getActor();
+      return Response.json(
+        await requestAccountToken({ email: actor.email }, "verify", actor),
+      );
+    }
+    if (action === "mfa-setup")
+      return Response.json(await setupMFA(await getActor()));
+    if (action === "mfa-enable")
+      return Response.json(await enableMFA(await getActor(), body));
+    if (action === "mfa-disable")
+      return Response.json(await disableMFA(await getActor(), body));
     if (action === "signup") await signup(body);
     else if (action === "login") await login(body);
     else if (action === "accept") await acceptInvite(body);

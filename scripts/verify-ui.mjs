@@ -80,9 +80,7 @@ try {
       );
   });
   await page.goto(base);
-  await page
-    .getByRole("button", { name: "Explore the demo workspace" })
-    .click();
+  await page.getByRole("button", { name: "Log in", exact: true }).click();
   await page
     .getByRole("heading", { name: "Good to see you, Amnan." })
     .waitFor({ timeout: 30000 });
@@ -206,6 +204,89 @@ try {
       checked: true,
     })
     .waitFor();
+  console.log("Checking onboarding review and the expanded HR screens.");
+  await nav("Employee files");
+  await page
+    .getByLabel("Filter employee")
+    .selectOption({ label: "UI Test Person" });
+  await page
+    .getByRole("button", { name: "Onboarding link", exact: true })
+    .click();
+  await page
+    .getByRole("heading", { name: "Private onboarding link" })
+    .waitFor();
+  const onboardingUrl = await page
+    .getByRole("dialog")
+    .getByRole("textbox")
+    .inputValue();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Close", exact: true })
+    .click();
+  const onboardingPage = await context.newPage();
+  await onboardingPage.goto(onboardingUrl);
+  await onboardingPage.getByLabel("Phone", { exact: true }).fill("0123456789");
+  await onboardingPage
+    .getByLabel("Emergency contact", { exact: true })
+    .fill("UI Contact");
+  await onboardingPage
+    .getByLabel("Emergency phone", { exact: true })
+    .fill("0120000000");
+  await onboardingPage
+    .getByLabel(/Dependants/)
+    .fill("Test Family | Spouse | 1995-01-01");
+  for (const type of ["Identity", "Contract"]) {
+    const block = onboardingPage
+      .locator(".checklist .row-between")
+      .filter({ hasText: type });
+    await block
+      .locator('input[type="file"]')
+      .setInputFiles({
+        name: type + ".txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Fabricated " + type + " for browser verification"),
+      });
+    await block.getByText(type + ".txt", { exact: true }).waitFor();
+  }
+  await onboardingPage
+    .getByRole("button", { name: "Submit to HR", exact: true })
+    .click();
+  await onboardingPage
+    .getByRole("heading", { name: "Ready for HR review" })
+    .waitFor();
+  await onboardingPage.close();
+  await page.reload();
+  await page
+    .getByRole("heading", { name: "Employee files", exact: true })
+    .waitFor();
+  await page
+    .locator(".onboarding-strip")
+    .getByRole("button", { name: "Approve", exact: true })
+    .click();
+  await page
+    .locator(".onboarding-strip")
+    .getByText(/Approved/)
+    .waitFor();
+  await page.screenshot({
+    path: "docs/screenshots/employee-files-desktop.png",
+    fullPage: true,
+  });
+  await nav("HR policies");
+  await page
+    .getByRole("heading", { name: "HR policies", exact: true })
+    .waitFor();
+  await page.getByRole("button", { name: "Claim types", exact: true }).click();
+  await nav("Review cycles");
+  await page
+    .getByRole("heading", { name: "Review cycles", exact: true })
+    .waitFor();
+  await nav("Goals & evaluations");
+  await page
+    .getByRole("heading", { name: "Goals & evaluations", exact: true })
+    .waitFor();
+  await page.getByLabel("Balanced scorecard").waitFor();
+  await nav("Payments");
+  await page.getByRole("heading", { name: "Payments", exact: true }).waitFor();
   await nav("Company handbook");
   await page.getByText("Leave and time off", { exact: true }).waitFor();
   await page
@@ -217,7 +298,7 @@ try {
     .waitFor();
   await page
     .locator("[data-sonner-toast]")
-    .waitFor({ state: "hidden", timeout: 10000 });
+    .waitFor({ state: "hidden", timeout: 15000 });
   await page.screenshot({
     path: "docs/screenshots/assistant-desktop.png",
     fullPage: true,
@@ -338,6 +419,53 @@ try {
       )
       .every((r) => r.data.salary === undefined),
   );
+  console.log("Checking the phone PWA and public-only offline cache.");
+  await page.waitForFunction(
+    () => navigator.serviceWorker.controller !== null,
+    undefined,
+    { timeout: 20000 },
+  );
+  const manifest = await (
+    await page.request.get(`${base}/manifest.webmanifest`)
+  ).json();
+  assert.equal(manifest.display, "standalone");
+  assert.equal(manifest.icons.length, 2);
+  const viewport = await page
+    .locator('meta[name="viewport"]')
+    .getAttribute("content");
+  assert(
+    viewport.includes("maximum-scale=1") &&
+      viewport.includes("user-scalable=no"),
+  );
+  const cached = await page.evaluate(async () => {
+    const keys = await caches.keys();
+    const urls = [];
+    for (const key of keys)
+      for (const request of await (await caches.open(key)).keys())
+        urls.push(new URL(request.url).pathname);
+    return urls;
+  });
+  assert(cached.includes("/offline.html"));
+  assert(
+    cached.every((url) =>
+      [
+        "/offline.html",
+        "/icon-192.png",
+        "/icon-512.png",
+        "/apple-touch-icon.png",
+      ].includes(url),
+    ),
+    "Private data entered the offline cache",
+  );
+  await context.setOffline(true);
+  await page
+    .getByText("Offline. Reconnect before submitting.", { exact: true })
+    .waitFor();
+  const offlinePage = await context.newPage();
+  await offlinePage.goto(base, { waitUntil: "domcontentloaded" });
+  await offlinePage.getByRole("heading", { name: "You’re offline." }).waitFor();
+  await offlinePage.close();
+  await context.setOffline(false);
   const blocked = await page.request.get(`${base}/api/export?type=employees`);
   assert.equal(blocked.status(), 403);
   assert.equal(errors.length, 0, "Browser errors: " + errors.join("; "));
@@ -351,6 +479,9 @@ try {
         assessmentSubmission: true,
         payrollPublication: true,
         employeeIsolation: true,
+        onboardingReview: true,
+        extendedScreens: true,
+        pwaPublicOfflineCache: true,
         browserErrors: errors,
       },
       null,

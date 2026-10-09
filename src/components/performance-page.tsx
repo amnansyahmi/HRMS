@@ -41,6 +41,38 @@ export function PerformancePage() {
           placeholder="Search goals…"
         />
       </div>
+      <div className="goal-grid" aria-label="Balanced scorecard">
+        {["Financial", "Customer", "Process", "Learning"].map((perspective) => {
+          const goals = rows.filter((g) => g.data.perspective === perspective),
+            weights = goals.reduce((n, g) => n + Number(g.data.weight || 1), 0);
+          const score = weights
+            ? Math.round(
+                (goals.reduce(
+                  (n, g) =>
+                    n +
+                    Math.min(
+                      1,
+                      Number(g.data.progress) / Number(g.data.target),
+                    ) *
+                      Number(g.data.weight || 1),
+                  0,
+                ) /
+                  weights) *
+                  100,
+              )
+            : 0;
+          return (
+            <div className="record-card" key={perspective}>
+              <strong>{perspective}</strong>
+              <p>
+                {goals.length
+                  ? `${score}% weighted progress · ${goals.length} goals`
+                  : "No goals yet"}
+              </p>
+            </div>
+          );
+        })}
+      </div>
       <div className="goal-grid">
         {rows.map((g) => {
           const percent = Math.min(
@@ -57,9 +89,22 @@ export function PerformancePage() {
               <Person
                 name={String(
                   employees.find((e) => e.id === g.employee_id)?.data.name ||
-                    "Employee",
+                    (g.data.scope === "Team"
+                      ? String(
+                          workspace.records.find(
+                            (r) => r.id === g.data.departmentId,
+                          )?.data.name || "Team",
+                        )
+                      : "Company"),
                 )}
               />
+              <small>
+                {String(g.data.scope || "Individual")} ·{" "}
+                {String(g.data.perspective || "Learning")}
+                {g.data.parentId
+                  ? ` · aligned to ${String(workspace.records.find((r) => r.id === g.data.parentId)?.data.title || "a parent goal")}`
+                  : ""}
+              </small>
               <div className="mini-progress">
                 <span style={{ width: `${percent}%` }} />
               </div>
@@ -81,16 +126,22 @@ export function PerformancePage() {
               ) : g.data.feedback ? (
                 <p className="evaluation-note">{String(g.data.feedback)}</p>
               ) : null}
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => edit("goal", g)}
-              >
-                <Pencil size={14} />
-                {!staff && g.employee_id === workspace.actor.employeeId
-                  ? "Update progress"
-                  : "Review goal"}
-              </Button>
+              {staff ||
+              g.employee_id === workspace.actor.employeeId ||
+              (workspace.actor.role === "manager" &&
+                employees.find((e) => e.id === g.employee_id)?.data
+                  .managerId === workspace.actor.employeeId) ? (
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => edit("goal", g)}
+                >
+                  <Pencil size={14} />
+                  {!staff && g.employee_id === workspace.actor.employeeId
+                    ? "Update progress"
+                    : "Review goal"}
+                </Button>
+              ) : null}
             </div>
           );
         })}

@@ -38,9 +38,10 @@ type Message = {
   role: string;
   content: string;
   sources: Source[];
+  cards?: { id: string; action: string; label: string; expiresAt: string }[];
 };
 export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
-  const { workspace, go, edit } = useWorkspace(),
+  const { workspace, go, edit, act } = useWorkspace(),
     [message, setMessage] = useState(intent?.message || ""),
     [mode, setMode] = useState(intent?.mode || "hr"),
     [recordId, setRecordId] = useState(intent?.recordId || ""),
@@ -136,7 +137,12 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
       setMessages([
         ...old,
         { role: "user", content: current, sources: result.sources },
-        { role: "assistant", content: result.text, sources: result.sources },
+        {
+          role: "assistant",
+          content: result.text,
+          sources: result.sources,
+          cards: result.cards,
+        },
       ]);
       void loadHistory();
     } catch (e) {
@@ -312,6 +318,35 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                         )}
                       </ReactMarkdown>
                     </div>
+                    {m.cards?.map((card) => (
+                      <div className="ai-action-card" key={card.id}>
+                        <strong>{card.label}</strong>
+                        <p>
+                          Confirm this change. Your permissions and the latest
+                          record will be checked.
+                        </p>
+                        <Button
+                          size="sm"
+                          onClick={async () => {
+                            const result = await act(
+                              "ai-confirm",
+                              { id: card.id },
+                              "Confirmed action completed",
+                            );
+                            if (result)
+                              setMessages((rows) =>
+                                rows.map((message) =>
+                                  message === m
+                                    ? { ...message, cards: [] }
+                                    : message,
+                                ),
+                              );
+                          }}
+                        >
+                          Confirm action
+                        </Button>
+                      </div>
+                    ))}
                     <div className="message-controls">
                       <Button
                         variant="ghost"
