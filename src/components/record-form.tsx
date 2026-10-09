@@ -14,7 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { api } from "@/lib/client";
+import { api, money } from "@/lib/client";
+import { sameClaimPeriod } from "@/lib/claim-period";
 import { toast } from "sonner";
 import { useWorkspace } from "./workspace-context";
 import { isStaff, type Data, type Kind, type HRRecord } from "@/lib/types";
@@ -675,6 +676,25 @@ export function RecordForm({
     dueDate: string | null;
     done: boolean;
   }[];
+  const claimPolicy =
+    kind === "claim"
+      ? workspace.records.find(
+          (r) => r.kind === "claim_type" && r.id === data.claimTypeId,
+        )
+      : null;
+  const claimReserved = claimPolicy
+    ? workspace.records
+        .filter(
+          (r) =>
+            r.kind === "claim" &&
+            r.id !== record?.id &&
+            r.employee_id === employeeId &&
+            r.data.claimTypeId === claimPolicy.id &&
+            ["Pending", "Approved", "Paid"].includes(String(r.data.status)) &&
+            sameClaimPeriod(claimPolicy.data.period, r.data, data),
+        )
+        .reduce((sum, r) => sum + Number(r.data.amount), 0)
+    : 0;
   return (
     <Dialog
       open
@@ -696,6 +716,21 @@ export function RecordForm({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={save}>
+          {claimPolicy ? (
+            <div className="info-note mb-4">
+              <strong>
+                {String(claimPolicy.data.name)} ·{" "}
+                {String(claimPolicy.data.period)}
+              </strong>
+              <p>
+                {claimPolicy.data.period === "Per trip" &&
+                !String(data.tripReference || "").trim()
+                  ? "Enter a trip reference to check its remaining balance."
+                  : `${money(Math.max(0, Number(claimPolicy.data.limit) - claimReserved))} available; ${money(claimReserved)} reserved or paid in this period.`}{" "}
+                Balance is rechecked when you submit.
+              </p>
+            </div>
+          ) : null}
           <div className="record-form-grid">
             {[
               "leave",

@@ -8,6 +8,8 @@
   "equipmentReturn": true,
   "returnedClaimResubmission": true,
   "specialistControls": true,
+  "reviewedHolidayImport": true,
+  "dictationRequiresReview": true,
   "approvalInbox": true,
   "scopedCalendarDownload": true,
   "profileChangeApproval": true,

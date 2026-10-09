@@ -244,7 +244,9 @@ export function AssessmentsPage() {
                         </td>
                         <td>
                           {r.data.submittedAt &&
-                          a.type === "Work preferences" ? (
+                          ["Work preferences", "DISC", "DOPE"].includes(
+                            a.type,
+                          ) ? (
                             <Button
                               variant="outline"
                               size="sm"

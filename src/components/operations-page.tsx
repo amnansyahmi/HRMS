@@ -19,6 +19,7 @@ import { isStaff, type Kind, type HRRecord, type Data } from "@/lib/types";
 import { toast } from "sonner";
 import { reviewOptions } from "@/lib/request-workflow";
 import { RequestReviewDialog } from "./request-review";
+import { HolidayImport } from "./holiday-import";
 export type OperationsView =
   | "employee-files"
   | "work-requests"
@@ -190,6 +191,7 @@ export function OperationsPage({ view }: { view: OperationsView }) {
           ))}
         </div>
       )}
+      {kind === "holiday" && staff ? <HolidayImport /> : null}
       <div className="table-toolbar">
         <NativeSelect
           label="Filter employee"

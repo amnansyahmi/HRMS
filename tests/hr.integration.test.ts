@@ -668,6 +668,12 @@ import {
   consumeAccountToken,
 } from "@/lib/account";
 import { saveAIProposal, confirmAIProposal } from "@/lib/ai-actions";
+import { cancelAIProposal } from "@/lib/ai-actions";
+import { pendingInvitations, revokeInvitation } from "@/lib/access";
+import { holidaysForState, parseHolidayCSV } from "@/lib/holidays";
+import { hrBrief } from "@/lib/hr-brief";
+import { hrReadFacts } from "@/lib/hr-read-facts";
+import { resumeEvidence, skillsRubric } from "@/lib/resume-evidence";
 import {
   uploadAudioPart,
   audioResponse,
@@ -972,12 +978,13 @@ describe("expanded HR workflows", () => {
     const result = (await operation(owner, "candidate-hire", {
       id: candidate.id,
       data: { startDate: "2026-11-01", salary: 4500 },
-    })) as { employeeId: string };
+    })) as { employeeId: string; invitationUrl?: string };
+    expect(result.invitationUrl).toMatch(/\/invite\/[a-f0-9]{64}$/);
     const second = await operation(owner, "candidate-hire", {
       id: candidate.id,
       data: { startDate: "2026-11-01", salary: 9000 },
     });
-    expect(second).toEqual(result);
+    expect(second).toEqual({ employeeId: result.employeeId });
     expect((await recordById(owner, result.employeeId)).data).toMatchObject({
       status: "Onboarding",
       salary: 4500,
@@ -2880,5 +2887,322 @@ describe("multi-run annual preparation worksheets", () => {
     expect(row[3]).toBe('"2"');
     expect(row[header.split(",").indexOf('"commission (MYR)"')]).toBe('"100"');
     expect(text).not.toContain('"NaN"');
+  });
+});
+
+describe("complete public HIRA workflows", () => {
+  it("reserves daily limits independently and groups trips across dates", async () => {
+    const e = await freshEmployee();
+    const daily = await createRecord(owner, "claim_type", {
+      data: {
+        name: "Daily meals",
+        limit: 100,
+        period: "Daily",
+        receiptRequired: false,
+      },
+    });
+    const claim = (date: string, extra = {}) =>
+      createRecord(asEmployee(e), "claim", {
+        data: expense(date, { claimTypeId: daily.id, amount: 70, ...extra }),
+      });
+    await claim("2026-10-01");
+    await expect(claim("2026-10-01")).rejects.toMatchObject({ status: 400 });
+    await claim("2026-10-02");
+    const trip = await createRecord(owner, "claim_type", {
+      data: {
+        name: "Trip budget",
+        limit: 100,
+        period: "Per trip",
+        receiptRequired: false,
+      },
+    });
+    await expect(claim("2026-10-03", { claimTypeId: trip.id })).rejects.toThrow(
+      "trip reference",
+    );
+    await claim("2026-10-03", {
+      claimTypeId: trip.id,
+      tripReference: "CLIENT-A",
+    });
+    await expect(
+      claim("2026-11-03", {
+        claimTypeId: trip.id,
+        tripReference: " client-a ",
+      }),
+    ).rejects.toThrow("balance");
+    await claim("2026-11-03", {
+      claimTypeId: trip.id,
+      tripReference: "CLIENT-B",
+    });
+  });
+  it("imports reviewed state holidays atomically, deduplicates and checks roles", async () => {
+    const sarawak = holidaysForState("Sarawak");
+    expect(sarawak.some((r) => r.title.includes("Deepavali"))).toBe(false);
+    expect(sarawak.filter((r) => r.title.includes("Gawai"))).toHaveLength(2);
+    const rows = [
+      {
+        title: "Import boundary holiday",
+        date: "2026-12-30",
+        state: "Sarawak",
+      },
+    ];
+    await expect(
+      operation(asEmployee(employee), "holidays-import", {
+        data: { rows, reviewed: true },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      operation(owner, "holidays-import", { data: { rows } }),
+    ).rejects.toThrow("Review");
+    await expect(
+      operation(owner, "holidays-import", {
+        data: {
+          rows: [...rows, { ...rows[0], date: "2026-02-30" }],
+          reviewed: true,
+        },
+      }),
+    ).rejects.toThrow();
+    expect(
+      (await visibleRecords(owner)).filter(
+        (r) => r.kind === "holiday" && r.data.title === rows[0].title,
+      ),
+    ).toHaveLength(0);
+    expect(
+      await operation(owner, "holidays-import", {
+        data: { rows: [...rows, ...rows], reviewed: true },
+      }),
+    ).toEqual({ created: 1, skipped: 1 });
+    expect(
+      await operation(owner, "holidays-import", {
+        data: { rows, reviewed: true },
+      }),
+    ).toEqual({ created: 0, skipped: 1 });
+    expect(
+      await operation(other, "holidays-import", {
+        data: { rows, reviewed: true },
+      }),
+    ).toEqual({ created: 1, skipped: 0 });
+    expect(
+      parseHolidayCSV(
+        'title,date,state\n"Holiday, reviewed",2026-12-31,National\n',
+      )[0].title,
+    ).toBe("Holiday, reviewed");
+  });
+  it("exposes invitation metadata only to owners and revokes the private link", async () => {
+    const e = await freshEmployee(),
+      rows = await pendingInvitations(owner),
+      invitation = rows.find((r) => r.employee_id === e.id)!;
+    expect(invitation).toBeDefined();
+    expect(invitation).not.toHaveProperty("token_hash");
+    await expect(pendingInvitations(asEmployee(e))).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(
+      revokeInvitation(other, { id: invitation.id }),
+    ).rejects.toMatchObject({ status: 404 });
+    await revokeInvitation(owner, { id: invitation.id });
+    expect(
+      new Date(
+        (await pendingInvitations(owner)).find((r) => r.id === invitation.id)!
+          .expires_at,
+      ).getTime(),
+    ).toBeLessThanOrEqual(Date.now());
+  });
+  it("saves exactly the reviewed AI letter wording and rejects incomplete drafts", async () => {
+    const previous = await settingsWith({
+      aiEnabled: true,
+      aiActionsEnabled: true,
+    });
+    try {
+      const e = await freshEmployee();
+      const data = {
+        title: "Reference reviewed by HR",
+        type: "Reference",
+        effectiveDate: "2026-10-09",
+        body: "Dear colleague,\n\nThis is the exact reviewed wording.\n\nHR team",
+      };
+      const incomplete = await saveAIProposal(
+        owner,
+        proposalText(
+          "letter-draft",
+          { type: "Reference", effectiveDate: data.effectiveDate },
+          e.id,
+        ),
+        [e],
+        "letters",
+      );
+      expect(incomplete.cards).toHaveLength(0);
+      const forbidden = await saveAIProposal(
+        asEmployee(e),
+        proposalText("letter-draft", data, e.id),
+        [e],
+        "letters",
+      );
+      expect(forbidden.cards).toHaveLength(0);
+      const proposal = await saveAIProposal(
+        owner,
+        proposalText("letter-draft", data, e.id),
+        [e],
+        "letters",
+      );
+      expect(proposal.cards[0].preview.body).toBe(data.body);
+      const result = await confirmAIProposal(owner, {
+        id: proposal.cards[0].id,
+      });
+      expect((result.result as HRRecord).data).toMatchObject({
+        ...data,
+        status: "Draft",
+      });
+      await expect(
+        confirmAIProposal(owner, { id: proposal.cards[0].id }),
+      ).rejects.toMatchObject({ status: 409 });
+    } finally {
+      await saveCompanyConfig(owner, {
+        name: previous.name,
+        settings: previous.settings,
+      });
+    }
+  });
+  it("prepares independent action cards and cancellation cannot mutate another card", async () => {
+    const previous = await settingsWith({
+      aiEnabled: true,
+      aiActionsEnabled: true,
+    });
+    try {
+      const e = await freshEmployee(),
+        a = await createRecord(asEmployee(e), "claim", { data: expense() }),
+        b = await createRecord(asEmployee(e), "claim", {
+          data: expense("2026-09-16"),
+        });
+      const text =
+        proposalText("review", { decision: "Approved" }, a.id) +
+        "\n" +
+        proposalText("review", { decision: "Approved" }, b.id);
+      const result = await saveAIProposal(owner, text, [a, b], "claims");
+      expect(result.cards).toHaveLength(2);
+      await expect(
+        cancelAIProposal(other, { id: result.cards[0].id }),
+      ).rejects.toMatchObject({ status: 409 });
+      await cancelAIProposal(owner, { id: result.cards[0].id });
+      await expect(
+        confirmAIProposal(owner, { id: result.cards[0].id }),
+      ).rejects.toMatchObject({ status: 409 });
+      await confirmAIProposal(owner, { id: result.cards[1].id });
+      expect((await recordById(owner, a.id)).data.status).toBe("Pending");
+      expect((await recordById(owner, b.id)).data.status).toBe("Approved");
+      expect(
+        (await saveAIProposal(owner, text, [a, b], "chro")).cards,
+      ).toHaveLength(0);
+    } finally {
+      await saveCompanyConfig(owner, {
+        name: previous.name,
+        settings: previous.settings,
+      });
+    }
+  });
+  it("computes the owner brief from full authorized records and observes payroll read controls", async () => {
+    const company = await getCompany(owner),
+      record = {
+        ...employee,
+        data: { ...employee.data, salary: 4321, departmentId: null },
+      };
+    const brief = hrBrief(
+      owner,
+      company,
+      [record, { ...record, id: randomUUID(), company_id: other.companyId }],
+      new Date("2026-10-08T17:00:00Z"),
+    );
+    expect(brief.date).toBe("2026-10-09");
+    expect(brief.headcount).toBe(1);
+    expect(brief.departments[0].monthlyBaseSalaryMYR).toBe(4321);
+    const restricted = {
+      ...company,
+      settings: {
+        ...company.settings,
+        aiSpecialists: {
+          ...company.settings.aiSpecialists,
+          payroll: { enabled: false, tools: [] },
+        },
+      },
+    };
+    expect(
+      hrBrief(owner, restricted, [record]).departments[0],
+    ).not.toHaveProperty("monthlyBaseSalaryMYR");
+    expect(hrBrief(owner, restricted, [record]).payrollRuns).toBeNull();
+    expect(() => hrBrief(asEmployee(employee), company, [record])).toThrow(
+      "owner",
+    );
+  });
+  it("scores only configured job skills with exact resume evidence and rejects fabricated quotations", () => {
+    const criteria = skillsRubric.parse([
+        { label: "React development", weight: 70 },
+        { label: "API implementation", weight: 30 },
+      ]),
+      resume = "Built React interfaces with measured performance improvements.";
+    const output = (quote: string) =>
+      "```resume-evidence\n" +
+      JSON.stringify([
+        { index: 0, grade: 3, quote, gap: "Confirm measurement" },
+        { index: 1, grade: 0, quote: "", gap: "Ask about APIs" },
+      ]) +
+      "\n```";
+    expect(resumeEvidence(output(resume), resume, criteria)).toContain(
+      "70/100",
+    );
+    expect(
+      resumeEvidence(output("Fabricated skill evidence"), resume, criteria),
+    ).not.toContain("70/100");
+    expect(
+      skillsRubric.safeParse([{ label: "Gender", weight: 1 }]).success,
+    ).toBe(false);
+    expect(resumeEvidence(output(resume), resume, criteria)).not.toContain(
+      "resume-evidence",
+    );
+  });
+});
+
+describe("deterministic assistant lookups", () => {
+  it("uses role-scoped reservations and withholds disabled specialist data", async () => {
+    const e = await freshEmployee(),
+      actor = asEmployee(e),
+      company = await getCompany(owner);
+    const policy = await createRecord(owner, "claim_type", {
+      data: {
+        name: "Lookup daily limit",
+        limit: 100,
+        period: "Daily",
+        receiptRequired: false,
+      },
+    });
+    await createRecord(actor, "claim", {
+      data: expense("2026-10-09", { claimTypeId: policy.id, amount: 30 }),
+    });
+    const visible = await visibleRecords(actor),
+      now = new Date("2026-10-08T17:00:00Z");
+    const facts = hrReadFacts(actor, company, visible, now);
+    expect(facts.date).toBe("2026-10-09");
+    expect(facts.pendingApprovalCount).toBe(0);
+    expect(
+      facts.ownClaimBalances?.find((r) => r.policyId === policy.id),
+    ).toMatchObject({ reservedOrPaidMYR: 30, availableMYR: 70 });
+    const restricted = {
+      ...company,
+      settings: {
+        ...company.settings,
+        aiSpecialists: {
+          ...company.settings.aiSpecialists,
+          payroll: { enabled: false, tools: [] },
+        },
+      },
+    };
+    const filtered = hrReadFacts(
+      actor,
+      restricted,
+      filterAIRecords(restricted.settings, visible),
+      now,
+    );
+    expect(filtered.ownOvertimeEstimateInputs).toBeNull();
+    expect(
+      filtered.ownClaimBalances?.find((r) => r.policyId === policy.id),
+    ).toMatchObject({ availableMYR: 70 });
   });
 });

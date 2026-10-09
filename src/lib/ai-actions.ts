@@ -18,7 +18,8 @@ import {
 } from "./hr";
 import { operation } from "./operations";
 import { fail } from "./errors";
-import type { Actor, Data, HRRecord } from "./types";
+import { isStaff, type Actor, type Data, type HRRecord } from "./types";
+import { schemas } from "./schema";
 export const proposalSchema = z.object({
   action: z.enum([
     "review",
@@ -43,6 +44,43 @@ export type ActionCard = {
 };
 /** Model output is only a proposal. No write tool is supplied to the model. */
 export async function saveAIProposal(
+  actor: Actor,
+  text: string,
+  context: HRRecord[],
+  mode = "hr",
+) {
+  const blocks = [...text.matchAll(/```hr-action\s*([\s\S]*?)```/g)];
+  const cleaned = text.replace(/```hr-action\s*[\s\S]*?```/g, "").trim();
+  if (mode === "chro") return { text: cleaned, cards: [] as ActionCard[] };
+  const cards: ActionCard[] = [],
+    targets = new Set<string>();
+  for (const block of blocks.slice(0, 5)) {
+    const parsed = (() => {
+      try {
+        return proposalSchema.safeParse(JSON.parse(block[1]));
+      } catch {
+        return null;
+      }
+    })();
+    if (!parsed?.success) continue;
+    const key = parsed.data.recordId || parsed.data.action;
+    if (targets.has(key)) continue;
+    targets.add(key);
+    const result = await saveOneProposal(actor, block[0], context, mode);
+    cards.push(...result.cards);
+  }
+  return {
+    text:
+      cleaned +
+      (blocks.length && !cards.length
+        ? "\n\nNo action card was prepared. Check your permissions, enabled tools and required fields before retrying."
+        : blocks.length > 5
+          ? "\n\nAt most five independent action cards are prepared per reply. Ask again for any remaining changes."
+          : ""),
+    cards,
+  };
+}
+async function saveOneProposal(
   actor: Actor,
   text: string,
   context: HRRecord[],
@@ -99,6 +137,20 @@ export async function saveAIProposal(
   )
     return { text: cleaned, cards: [] as ActionCard[] };
   const specialist = specialistFor(proposal.action, record?.kind);
+  if (proposal.action === "letter-draft") {
+    const letter = schemas.letter.safeParse({
+      ...proposal.data,
+      status: "Draft",
+    });
+    if (!isStaff(actor) || !letter.success)
+      return { text: cleaned, cards: [] as ActionCard[] };
+    proposal.data = {
+      title: letter.data.title,
+      type: letter.data.type,
+      effectiveDate: letter.data.effectiveDate,
+      body: letter.data.body,
+    };
+  }
   try {
     checkAIMode(company.settings, mode);
   } catch {
@@ -177,6 +229,15 @@ export async function saveAIProposal(
       },
     ],
   };
+}
+export async function cancelAIProposal(actor: Actor, input: unknown) {
+  const { id } = z.object({ id: z.uuid() }).parse(input);
+  const result = await db.query(
+    "UPDATE ai_proposals SET status='Cancelled' WHERE id=$1 AND company_id=$2 AND user_id=$3 AND status='Pending' RETURNING id",
+    [id, actor.companyId, actor.userId],
+  );
+  if (!result.rows.length) fail("This action card is no longer pending", 409);
+  return { ok: true };
 }
 export async function confirmAIProposal(actor: Actor, input: unknown) {
   const { id, coordinates } = z

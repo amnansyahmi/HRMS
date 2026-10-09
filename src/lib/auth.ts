@@ -141,6 +141,7 @@ export const defaultSettings = {
     resume: true,
     meeting: true,
     preferences: true,
+    chro: false,
   },
   careersIntro: "Join our team. Explore opportunities and apply below.",
   registrationNo: "",

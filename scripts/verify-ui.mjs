@@ -70,6 +70,25 @@ try {
     }),
     page = await context.newPage();
   page.on("pageerror", (e) => errors.push(e.message));
+  await page.addInitScript(() => {
+    window.SpeechRecognition = class {
+      start() {
+        queueMicrotask(() => {
+          this.onresult?.({
+            resultIndex: 0,
+            results: [
+              { isFinal: true, 0: { transcript: "Who is on leave today?" } },
+            ],
+          });
+          this.onend?.();
+        });
+      }
+      stop() {
+        this.onend?.();
+      }
+      abort() {}
+    };
+  });
   page.on("response", async (response) => {
     if (response.url().includes("/api/auth/demo") && !response.ok())
       console.error(
@@ -451,6 +470,24 @@ try {
     .getByRole("heading", { name: "HR policies", exact: true })
     .waitFor();
   await page.getByRole("button", { name: "Claim types", exact: true }).click();
+  await page.getByRole("button", { name: "Holidays", exact: true }).click();
+  await page
+    .getByLabel("Holiday state", { exact: true })
+    .selectOption("Sarawak");
+  await page.getByRole("button", { name: "Preview 2026 holidays" }).click();
+  const holidayDialog = page.getByRole("dialog");
+  await holidayDialog
+    .getByLabel("Holiday 1 title", { exact: true })
+    .fill("Reviewed UI holiday");
+  await holidayDialog
+    .getByLabel("Holiday 1 date", { exact: true })
+    .fill("2026-12-29");
+  await holidayDialog.getByRole("checkbox").check();
+  await holidayDialog
+    .getByRole("button", { name: /^Import \d+ holidays$/ })
+    .click();
+  await holidayDialog.waitFor({ state: "hidden" });
+  await page.getByText("Reviewed UI holiday", { exact: true }).waitFor();
   await nav("Review cycles");
   await page
     .getByRole("heading", { name: "Review cycles", exact: true })
@@ -471,6 +508,18 @@ try {
   await page
     .getByRole("heading", { name: "What can I help you with?" })
     .waitFor();
+  await page.getByRole("button", { name: "Dictate message" }).click();
+  await page.waitForFunction(
+    () =>
+      document.querySelector('textarea[aria-label="Message People AI"]')
+        ?.value === "Who is on leave today?",
+  );
+  assert.equal(
+    await page.locator(".user-message").count(),
+    0,
+    "Dictation must not send without review",
+  );
+  await page.getByLabel("Message People AI").fill("");
   await page.waitForFunction(
     () => !document.querySelector("[data-sonner-toast]"),
     undefined,
@@ -888,6 +937,8 @@ try {
         equipmentReturn: true,
         returnedClaimResubmission: true,
         specialistControls: true,
+        reviewedHolidayImport: true,
+        dictationRequiresReview: true,
         approvalInbox: true,
         scopedCalendarDownload: true,
         profileChangeApproval: true,

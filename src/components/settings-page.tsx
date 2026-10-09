@@ -1,5 +1,6 @@
 "use client";
 import { PayrollAccessControl, SpecialistControls } from "./workflow-settings";
+import { PendingInvitations } from "./pending-invitations";
 import { SecuritySettings } from "./security-page";
 import { SetupStatus } from "./setup-status";
 import { useState } from "react";
@@ -189,7 +190,7 @@ export function SettingsPage() {
         <section className="settings-panel">
           <h2>AI assistants</h2>
           <div className="checklist">
-            {["hr", "recruit", "resume", "meeting", "preferences"].map(
+            {["hr", "recruit", "resume", "meeting", "preferences", "chro"].map(
               (mode) => (
                 <label key={mode}>
                   <Checkbox
@@ -208,6 +209,7 @@ export function SettingsPage() {
                             resume: true,
                             meeting: true,
                             preferences: true,
+                            chro: false,
                           }),
                           [mode]: value === true,
                         },
@@ -217,13 +219,15 @@ export function SettingsPage() {
                   <span>
                     {mode === "hr"
                       ? "HR questions"
-                      : mode === "resume"
-                        ? "Resume review"
-                        : mode === "preferences"
-                          ? "Work preferences"
-                          : mode === "meeting"
-                            ? "Meeting summaries"
-                            : "Recruitment"}
+                      : mode === "chro"
+                        ? "Read-only CHRO brief (owner)"
+                        : mode === "resume"
+                          ? "Resume review"
+                          : mode === "preferences"
+                            ? "Work preferences"
+                            : mode === "meeting"
+                              ? "Meeting summaries"
+                              : "Recruitment"}
                   </span>
                 </label>
               ),
@@ -512,6 +516,7 @@ export function SettingsPage() {
               </tbody>
             </table>
           </div>
+          <PendingInvitations revision={inviteLink} />
           <div className="role-guide">
             <h3>Access at a glance</h3>
             <p>

@@ -30,6 +30,7 @@ import {
   specialistAllows,
 } from "@/lib/workflow-config";
 import { isStaff } from "@/lib/types";
+import { Dictation, ReadAnswer } from "./voice-controls";
 export type AssistantIntent = {
   mode: string;
   recordId?: string;
@@ -72,6 +73,11 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
       toast.error((e as Error).message);
     }
   }, []);
+  const appendDictation = useCallback(
+    (text: string) =>
+      setMessage((old) => `${old}${old ? " " : ""}${text}`.slice(0, 4000)),
+    [],
+  );
   useEffect(() => {
     let active = true;
     api<Message[]>("/api/ai")
@@ -97,8 +103,9 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
         : mode === "preferences"
           ? r.kind === "assessment_result" &&
             !!r.data.submittedAt &&
-            (r.data.assessmentSnapshot as { type: string }).type ===
-              "Work preferences"
+            ["Work preferences", "DISC", "DOPE"].includes(
+              (r.data.assessmentSnapshot as { type: string }).type,
+            )
           : false,
   );
   const recordLabel = (id: string) => {
@@ -338,9 +345,20 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                           record will be checked.
                         </p>
                         {card.preview ? (
-                          <pre className="action-preview">
-                            {JSON.stringify(card.preview, null, 2)}
-                          </pre>
+                          card.action === "letter-draft" ? (
+                            <div className="action-preview preserve-lines">
+                              <strong>{String(card.preview.title)}</strong>
+                              <p>{String(card.preview.body)}</p>
+                              <small>
+                                Save as draft only ·{" "}
+                                {String(card.preview.effectiveDate)}
+                              </small>
+                            </div>
+                          ) : (
+                            <pre className="action-preview">
+                              {JSON.stringify(card.preview, null, 2)}
+                            </pre>
+                          )
                         ) : null}
                         <Button
                           size="sm"
@@ -388,7 +406,12 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                               setMessages((rows) =>
                                 rows.map((message) =>
                                   message === m
-                                    ? { ...message, cards: [] }
+                                    ? {
+                                        ...message,
+                                        cards: message.cards?.filter(
+                                          (c) => c.id !== card.id,
+                                        ),
+                                      }
                                     : message,
                                 ),
                               );
@@ -396,9 +419,34 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                         >
                           Confirm action
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={async () => {
+                            const result = await act("ai-cancel", {
+                              id: card.id,
+                            });
+                            if (result)
+                              setMessages((rows) =>
+                                rows.map((row) =>
+                                  row === m
+                                    ? {
+                                        ...row,
+                                        cards: row.cards?.filter(
+                                          (c) => c.id !== card.id,
+                                        ),
+                                      }
+                                    : row,
+                                ),
+                              );
+                          }}
+                        >
+                          Cancel
+                        </Button>
                       </div>
                     ))}
                     <div className="message-controls">
+                      <ReadAnswer text={m.content} />
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -470,6 +518,7 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
         <div ref={end} />
       </div>
       <div className="composer-area">
+        <Dictation onTranscript={appendDictation} disabled={busy} />
         <div className="composer-options">
           <NativeSelect
             label="Assistant mode"
@@ -480,6 +529,10 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
             }}
             options={[
               { value: "hr", label: "HR assistant" },
+              ...(workspace.actor.role === "owner" &&
+              workspace.company.settings.aiAgents.chro
+                ? [{ value: "chro", label: "CHRO brief · read only" }]
+                : []),
               ...specialistNames
                 .filter(
                   (name) =>

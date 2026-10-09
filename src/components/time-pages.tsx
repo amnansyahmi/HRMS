@@ -1,4 +1,5 @@
 "use client";
+import { sameClaimPeriod } from "@/lib/claim-period";
 import { reviewOptions, approvalStage } from "@/lib/request-workflow";
 import { leaveEntitlement } from "@/lib/leave-entitlement";
 import { toast } from "sonner";
@@ -463,24 +464,21 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
             )
             .map((policy) => {
               const period = policy.data.period,
-                prefix =
-                  period === "Annual"
-                    ? balanceDate.slice(0, 4)
-                    : balanceDate.slice(0, 7),
-                used =
-                  period === "Per request"
-                    ? 0
-                    : all
-                        .filter(
-                          (r) =>
-                            r.employee_id === own.id &&
-                            r.data.claimTypeId === policy.id &&
-                            ["Pending", "Approved", "Paid"].includes(
-                              String(r.data.status),
-                            ) &&
-                            String(r.data.date).startsWith(prefix),
-                        )
-                        .reduce((n, r) => n + Number(r.data.amount), 0);
+                used = ["Per request", "Per trip"].includes(String(period))
+                  ? 0
+                  : all
+                      .filter(
+                        (r) =>
+                          r.employee_id === own.id &&
+                          r.data.claimTypeId === policy.id &&
+                          ["Pending", "Approved", "Paid"].includes(
+                            String(r.data.status),
+                          ) &&
+                          sameClaimPeriod(period, r.data, {
+                            date: balanceDate,
+                          }),
+                      )
+                      .reduce((n, r) => n + Number(r.data.amount), 0);
               return (
                 <div key={policy.id}>
                   <Receipt size={18} />
@@ -490,7 +488,7 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
                     </small>
                     <strong>
                       {money(Math.max(0, Number(policy.data.limit) - used))}{" "}
-                      available
+                      {period === "Per trip" ? "limit per trip" : "available"}
                     </strong>
                     <p>Pending claims reserve balance</p>
                   </div>

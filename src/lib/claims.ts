@@ -42,6 +42,7 @@ export async function resubmitClaim(actor: Actor, input: unknown) {
         "category",
         "claimTypeId",
         "mileageKm",
+        "tripReference",
         "date",
         "amount",
         "description",

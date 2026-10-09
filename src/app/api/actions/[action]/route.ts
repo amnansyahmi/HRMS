@@ -14,7 +14,7 @@ import {
 } from "@/lib/hr";
 import { ocrReceipt } from "@/lib/ocr";
 import { transcribeMeeting } from "@/lib/media";
-import { confirmAIProposal } from "@/lib/ai-actions";
+import { confirmAIProposal, cancelAIProposal } from "@/lib/ai-actions";
 import { operation } from "@/lib/operations";
 import { inviteAssessment, createProfileTemplate } from "@/lib/recruitment";
 import { handle } from "@/lib/errors";
@@ -41,6 +41,8 @@ export async function POST(
       return Response.json(await transcribeMeeting(actor, body));
     if (action === "ai-confirm")
       return Response.json(await confirmAIProposal(actor, body));
+    if (action === "ai-cancel")
+      return Response.json(await cancelAIProposal(actor, body));
     if (action === "clock") return Response.json(await clock(actor, body));
     if (action === "review")
       return Response.json(await reviewRequest(actor, body));

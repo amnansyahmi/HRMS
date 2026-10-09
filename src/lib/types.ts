@@ -88,6 +88,7 @@ export interface Company {
       resume: boolean;
       meeting: boolean;
       preferences: boolean;
+      chro: boolean;
     };
     careersIntro: string;
     registrationNo: string;

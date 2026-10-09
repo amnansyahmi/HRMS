@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { skillsRubric } from "./resume-evidence";
 import { extendedSchemas, employeeFields } from "./extended-schema";
 import {
   defaultEmployeeStatuses,
@@ -130,6 +131,7 @@ export const schemas = {
   claim: z.object({
     category: text,
     claimTypeId: optionalId,
+    tripReference: z.string().trim().max(100).default(""),
     mileageKm: z.coerce.number().min(0).max(10000).default(0),
     approvalStep: z.number().int().min(0).max(2).default(0),
     date,
@@ -233,6 +235,7 @@ export const schemas = {
     feedback: long,
   }),
   job: z.object({
+    scoreCriteria: skillsRubric,
     screeningQuestions: z.array(text).max(10).default([]),
     templateName: z.string().max(100).default(""),
     title: text,
@@ -425,6 +428,7 @@ export const companySettings = z.object({
       resume: z.boolean(),
       meeting: z.boolean(),
       preferences: z.boolean(),
+      chro: z.boolean().default(false),
     })
     .default({
       hr: true,
@@ -432,6 +436,7 @@ export const companySettings = z.object({
       resume: true,
       meeting: true,
       preferences: true,
+      chro: false,
     }),
   careersIntro: z.string().max(3000),
   registrationNo: z.string().max(60),

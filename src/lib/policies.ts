@@ -1,3 +1,4 @@
+import { sameClaimPeriod } from "./claim-period";
 import { leaveEntitlement } from "./leave-entitlement";
 import { getCompany } from "./auth";
 import { type DB } from "./db";
@@ -176,9 +177,9 @@ export async function claimBalance(
         Number(data.mileageKm) * Number(policy.data.mileageRate) * 100,
       ) / 100;
   }
-  const period = policy.data.period,
-    date = String(data.date),
-    prefix = period === "Annual" ? date.slice(0, 4) : date.slice(0, 7);
+  const period = policy.data.period;
+  if (period === "Per trip" && !String(data.tripReference || "").trim())
+    fail("Enter a trip reference for this claim policy");
   const rows = (
     await tx.query<HRRecord>(
       "SELECT * FROM hr_records WHERE company_id=$1 AND employee_id=$2 AND kind='claim' AND data->>'claimTypeId'=$3 AND data->>'status' IN ('Pending','Approved','Paid') AND ($4::uuid IS NULL OR id<>$4)",
@@ -189,7 +190,7 @@ export async function claimBalance(
       period === "Per request"
         ? 0
         : rows
-            .filter((r) => String(r.data.date).startsWith(prefix))
+            .filter((r) => sameClaimPeriod(period, r.data, data))
             .reduce((n, r) => n + Number(r.data.amount), 0),
     available = Math.max(0, Number(policy.data.limit) - used);
   if (Number(data.amount) > available + 0.001)
