@@ -3,7 +3,7 @@ import {
   LayoutDashboard,
   Clock3,
   ClipboardCheck,
-  MessageSquare,
+  Sparkles,
   Grid2X2,
 } from "lucide-react";
 import { pendingDashboardRequests } from "@/lib/dashboard";
@@ -13,7 +13,7 @@ import type { Page } from "./workspace-context";
 const destinations = [
   { page: "overview", label: "Home", icon: LayoutDashboard },
   { page: "attendance", label: "Time", icon: Clock3 },
-  { page: "assistant", label: "Ask AI", icon: MessageSquare },
+  { page: "assistant", label: "Ask AI", icon: Sparkles },
   { page: "approvals", label: "Inbox", icon: ClipboardCheck },
 ] as const;
 const timePages: Page[] = ["attendance", "leave", "work-requests", "calendar"];

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { ClipboardCheck, Loader2, MessageSquare } from "lucide-react";
+import { ClipboardCheck, Loader2, Sparkles } from "lucide-react";
 import { hasPayroll } from "@/lib/workflow-config";
 import { api } from "@/lib/client";
 import { Button } from "./ui/button";
@@ -98,7 +98,7 @@ export function PayrollChecks({
                       )
                     }
                   >
-                    <MessageSquare size={15} />
+                    <Sparkles size={15} />
                     Explain with AI
                   </Button>
                 </div>

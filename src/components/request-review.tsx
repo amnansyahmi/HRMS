@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { Sparkles } from "lucide-react";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import {
@@ -247,6 +248,7 @@ export function RequestReviewDialog({
               onClose();
             }}
           >
+            <Sparkles size={16} />
             Ask AI about this request
           </Button>
           <Button variant="outline" disabled={busy} onClick={onClose}>

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Bell, MessageSquare, ArrowRight } from "lucide-react";
+import { Bell, Sparkles, ArrowRight } from "lucide-react";
 import { api } from "@/lib/client";
 import { Button } from "./ui/button";
 import { useWorkspace, type Page } from "./workspace-context";
@@ -75,7 +75,7 @@ export function HRDigest() {
                 )
               }
             >
-              <MessageSquare size={16} />
+              <Sparkles size={16} />
               Discuss with AI
             </Button>
           </>

@@ -5,7 +5,7 @@ import {
   Building2,
   ArrowUpRight,
   Download,
-  MessageSquare,
+  Sparkles,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -281,7 +281,7 @@ export function PeoplePage() {
                   setSelected(null);
                 }}
               >
-                <MessageSquare size={16} />
+                <Sparkles size={16} />
                 Ask AI about this employee
               </Button>
               {staff ? (
