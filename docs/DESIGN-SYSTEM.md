@@ -1,6 +1,6 @@
 # Nonymauz People design
 
-One teal accent identifies actions and selection. Warm surfaces and charcoal text keep HR information readable. Status colors communicate meaning rather than decorating cards.
+One teal accent identifies actions and selection. Warm surfaces and charcoal text keep HR information readable. A restrained teal, blue, amber and violet palette gives dashboard categories distinct surfaces. Status badges retain their own semantic labels.
 
 | Token                   | Light     | Dark      | Use                                                            |
 | ----------------------- | --------- | --------- | -------------------------------------------------------------- |
@@ -18,4 +18,6 @@ Colors live in `src/app/globals.css` and feed the existing shadcn/ui components.
 
 Widgets use a two-column desktop layout and one column on phones, with 12px panel corners, 16–24px spacing and visible keyboard focus. The seven-day agenda compresses across the phone width; primary controls and the bottom navigation retain at least 44px touch height. Navigation respects safe areas and clears the chat keyboard. Use Lucide SVG icons with accessible names on icon-only buttons.
 
-Avoid decorative gradients, fake trend percentages, unrelated accent colors, emoji icons and private data in browser preference storage. Widget data comes from the authenticated workspace; display counts with their scope and retain the server's normal approval and clock validation flows.
+Avoid decorative gradients, fake trend percentages, unrelated accent colors outside the dashboard palette, emoji icons and private data in browser preference storage. Widget data comes from the authenticated workspace; display counts with their scope and retain the server's normal approval and clock validation flows.
+
+Dashboard summary cards use solid pale teal (`#DDEFE9`), blue (`#E1ECFA`), amber (`#F9EACB`) and violet (`#EDE4F7`) surfaces with dark matching text. The workday card uses deep teal (`#14665B`) and white text. Dark mode uses muted category surfaces and lighter text; the workday card keeps its deep teal fill. Chart bars highlight today; doughnut segments share the category palette and always include labeled counts. No attendance rate or trend is inferred from missing schedules. Charts use the server-authorized, currently loaded records; workdays deduplicate clock sessions per person and date.

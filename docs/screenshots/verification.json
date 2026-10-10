@@ -1,6 +1,7 @@
 {
   "desktop": true,
   "dashboardWidgets": true,
+  "dashboardCharts": true,
   "widgetPreferencePersistence": true,
   "accountScopedPreferences": true,
   "phoneHubNavigation": true,

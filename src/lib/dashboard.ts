@@ -29,6 +29,16 @@ export const dashboardWidgets = [
     label: "HR digest",
     detail: "Due work and upcoming follow-ups",
   },
+  {
+    id: "activity",
+    label: "Attendance activity",
+    detail: "Daily attendance across the last seven days",
+  },
+  {
+    id: "request-mix",
+    label: "Request breakdown",
+    detail: "Pending requests grouped by type",
+  },
   { id: "goals", label: "Goals", detail: "Progress on your available goals" },
 ] as const;
 export type DashboardWidget = (typeof dashboardWidgets)[number]["id"];
@@ -122,4 +132,56 @@ export function goalPercent(progress: unknown, target: unknown) {
   return Number.isFinite(p) && Number.isFinite(t) && t > 0
     ? Math.round(Math.min(100, Math.max(0, (p / t) * 100)))
     : 0;
+}
+
+/** Count a person once per work date, even when they clock in more than once. */
+export function dashboardAnalytics(
+  snapshot: ReturnType<typeof dashboardSnapshot>,
+) {
+  const days = Array.from({ length: 7 }, (_, i) => ({
+    date: addCalendarDays(snapshot.today, i - 6),
+    people: new Set<string>(),
+  }));
+  const byDate = new Map(days.map((day) => [day.date, day.people]));
+  for (const record of snapshot.records) {
+    if (
+      record.kind !== "attendance" ||
+      !record.employee_id ||
+      !Number.isFinite(Date.parse(String(record.data.clockIn || "")))
+    )
+      continue;
+    byDate.get(String(record.data.workDate))?.add(record.employee_id);
+  }
+  const categories = [
+    { id: "leave", label: "Leave", kinds: ["leave"], tone: "blue" },
+    { id: "claims", label: "Claims", kinds: ["claim"], tone: "amber" },
+    {
+      id: "time",
+      label: "Time requests",
+      kinds: ["overtime", "time_off", "attendance_correction", "lateness"],
+      tone: "teal",
+    },
+    {
+      id: "profile",
+      label: "Profile changes",
+      kinds: ["profile_change"],
+      tone: "violet",
+    },
+    {
+      id: "goals",
+      label: "Goal updates",
+      kinds: ["goal_update"],
+      tone: "rose",
+    },
+  ];
+  const requests = categories.map(({ kinds, ...category }) => ({
+    ...category,
+    count: snapshot.pending.filter((record) => kinds.includes(record.kind))
+      .length,
+  }));
+  return {
+    attendance: days.map(({ date, people }) => ({ date, count: people.size })),
+    requests,
+    totalRequests: snapshot.pending.length,
+  };
 }

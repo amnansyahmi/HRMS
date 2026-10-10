@@ -14,11 +14,19 @@ import {
 import { Button } from "@/components/ui/button";
 import { useWorkspace } from "./workspace-context";
 import { PageHeader, Person, Status, Empty, InlineLink } from "./common";
-import { dashboardSnapshot, goalPercent } from "@/lib/dashboard";
+import {
+  dashboardSnapshot,
+  dashboardWidgets,
+  goalPercent,
+} from "@/lib/dashboard";
 import {
   DashboardPreferences,
   useDashboardWidgets,
 } from "./dashboard-preferences";
+import {
+  AttendanceActivityWidget,
+  RequestBreakdownWidget,
+} from "./dashboard-charts";
 import { WorkdayWidget, AgendaWidget } from "./dashboard-widgets";
 import { isStaff, type HRRecord } from "@/lib/types";
 import { useState } from "react";
@@ -40,6 +48,7 @@ export function OverviewPage() {
   const metrics = [
     {
       label: "People",
+      tone: "teal",
       value: employees.length,
       detail: "People in your directory",
       icon: Users,
@@ -47,6 +56,7 @@ export function OverviewPage() {
     },
     {
       label: "Clocked in",
+      tone: "blue",
       value: snapshot.clockedIn,
       detail: "Active sessions available to you",
       icon: Clock3,
@@ -54,6 +64,7 @@ export function OverviewPage() {
     },
     {
       label: "Pending requests",
+      tone: "amber",
       value: pending.length,
       detail: canReview
         ? "Your available pending requests"
@@ -65,6 +76,7 @@ export function OverviewPage() {
       ? [
           {
             label: "Open roles",
+            tone: "violet",
             value: jobs.length,
             detail: "Published on your career page",
             icon: BriefcaseBusiness,
@@ -74,6 +86,7 @@ export function OverviewPage() {
       : [
           {
             label: "Away today",
+            tone: "violet",
             value: snapshot.away,
             detail: "Approved time away",
             icon: CalendarDays,
@@ -113,7 +126,11 @@ export function OverviewPage() {
         aria-label="Dashboard summary"
       >
         {metrics.map((m) => (
-          <button className="metric" key={m.label} onClick={() => go(m.page)}>
+          <button
+            className={`metric metric-${m.tone}`}
+            key={m.label}
+            onClick={() => go(m.page)}
+          >
             <div>
               <span>{m.label}</span>
               <m.icon size={17} />
@@ -157,6 +174,12 @@ export function OverviewPage() {
       <div className="dashboard-grid">
         {show("workday") ? <WorkdayWidget snapshot={snapshot} /> : null}
         {show("agenda") ? <AgendaWidget snapshot={snapshot} /> : null}
+        {show("activity") ? (
+          <AttendanceActivityWidget snapshot={snapshot} />
+        ) : null}
+        {show("request-mix") ? (
+          <RequestBreakdownWidget snapshot={snapshot} />
+        ) : null}
         {show("requests") ? (
           <section
             className="panel dashboard-widget"
@@ -336,10 +359,9 @@ export function OverviewPage() {
           </section>
         ) : null}
       </div>
-      {["agenda", "requests", "attendance", "digest", "goals"].every((id) =>
-        hidden.includes(id as import("@/lib/dashboard").DashboardWidget),
-      ) &&
-      (!snapshot.own || hidden.includes("workday")) ? (
+      {dashboardWidgets
+        .filter((widget) => widget.id !== "workday" || snapshot.own)
+        .every((widget) => hidden.includes(widget.id)) ? (
         <p className="dashboard-empty">
           Your widgets are hidden. Use Widgets to add them back.
         </p>
