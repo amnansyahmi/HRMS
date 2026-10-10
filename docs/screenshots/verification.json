@@ -1,5 +1,9 @@
 {
   "desktop": true,
+  "dashboardWidgets": true,
+  "widgetPreferencePersistence": true,
+  "accountScopedPreferences": true,
+  "phoneHubNavigation": true,
   "mobile": true,
   "publicApplications": true,
   "assessmentSubmission": true,

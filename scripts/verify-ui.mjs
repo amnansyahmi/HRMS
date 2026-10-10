@@ -77,6 +77,42 @@ try {
     }),
     page = await context.newPage();
   page.on("pageerror", (e) => errors.push(e.message));
+  const ensureThemeContrast = async () => {
+    await page.waitForFunction(() => {
+      const luminance = (value) => {
+        const rgb = value
+          .match(/[\d.]+/g)
+          .slice(0, 3)
+          .map(Number)
+          .map((n) => {
+            const v = n / 255;
+            return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+          });
+        return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+      };
+      const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+      if (
+        getComputedStyle(document.documentElement).colorScheme !==
+        (dark ? "dark" : "light")
+      )
+        return false;
+      const body = getComputedStyle(document.body);
+      const foreground = luminance(body.color),
+        background = luminance(body.backgroundColor);
+      return (
+        (Math.max(foreground, background) + 0.05) /
+          (Math.min(foreground, background) + 0.05) >=
+        4.5
+      );
+    });
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    );
+  };
+
   await page.addInitScript(() => {
     window.SpeechRecognition = class {
       start() {
@@ -97,6 +133,17 @@ try {
     };
   });
   page.on("response", async (response) => {
+    if (
+      response.url().startsWith(base + "/api/") &&
+      response.status() >= 400 &&
+      response.request().method() !== "GET"
+    )
+      console.error(
+        "API mutation failed:",
+        response.url(),
+        response.status(),
+        await response.text(),
+      );
     if (response.url().includes("/api/auth/demo") && !response.ok())
       console.error(
         "Demo login failed:",
@@ -111,6 +158,39 @@ try {
   await page
     .getByRole("heading", { name: "Your workday, Amnan." })
     .waitFor({ timeout: 30000 });
+  const widget = (name) => page.locator(`[data-dashboard-widget="${name}"]`);
+  await widget("agenda").waitFor();
+  await page.getByRole("button", { name: "Widgets", exact: true }).click();
+  await page.getByRole("checkbox", { name: /^This week/ }).uncheck();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  assert.equal(await widget("agenda").count(), 0);
+  await page.reload();
+  await page.getByRole("heading", { name: "Your workday, Amnan." }).waitFor();
+  await page.waitForFunction(() =>
+    Object.keys(localStorage).some((key) =>
+      key.startsWith("nonymauz:dashboard:v1:"),
+    ),
+  );
+  assert.equal(
+    await widget("agenda").count(),
+    0,
+    "Hidden widgets must survive reload",
+  );
+  await page.getByRole("button", { name: "Widgets", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Reset widgets", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await widget("agenda").waitFor();
+  await widget("agenda").locator(".agenda-days button").nth(1).click();
+  assert.equal(
+    await widget("agenda").locator('button[aria-pressed="true"]').count(),
+    1,
+  );
+  await widget("agenda").locator(".agenda-days button").first().click();
+  await page
+    .getByText("Loading follow-ups…", { exact: true })
+    .waitFor({ state: "hidden" });
   await mkdir("docs/screenshots", { recursive: true });
   await page.screenshot({
     path: "docs/screenshots/overview-desktop.png",
@@ -472,6 +552,7 @@ try {
     fullPage: true,
   });
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await ensureThemeContrast();
   await page.screenshot({
     path: "docs/screenshots/settings-dark-desktop.png",
     fullPage: true,
@@ -857,6 +938,37 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(base);
   await page.getByRole("heading", { name: "Your workday, Amnan." }).waitFor();
+  await widget("agenda").waitFor();
+  await page
+    .getByText("Loading follow-ups…", { exact: true })
+    .waitFor({ state: "hidden" });
+  const phoneNav = page.getByRole("navigation", { name: "Phone navigation" });
+  assert.equal(await phoneNav.getByRole("button").count(), 5);
+  await phoneNav.getByRole("button", { name: "Time", exact: true }).click();
+  await page
+    .getByRole("heading", { name: "Attendance & shifts", exact: true })
+    .waitFor();
+  await page
+    .locator(".hub-tabs")
+    .getByRole("button", { name: "Leave", exact: true })
+    .click();
+  assert.equal(
+    await phoneNav
+      .getByRole("button", { name: "Time", exact: true })
+      .getAttribute("aria-current"),
+    "page",
+    "Time hub must stay active on Leave",
+  );
+  await phoneNav.getByRole("button", { name: "Home", exact: true }).click();
+  await widget("agenda").waitFor();
+  await page.setViewportSize({ width: 320, height: 640 });
+  assert(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    "Dashboard overflows a small phone",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({
     path: "docs/screenshots/overview-mobile.png",
     fullPage: true,
@@ -867,7 +979,24 @@ try {
     ),
     "Mobile page overflows horizontally",
   );
-  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await ensureThemeContrast();
+  await page.screenshot({
+    path: "docs/screenshots/overview-dark-mobile.png",
+    fullPage: true,
+  });
+  await page.emulateMedia({
+    colorScheme: "light",
+    reducedMotion: "no-preference",
+  });
+  await ensureThemeContrast();
+  await phoneNav.getByRole("button", { name: "Menu", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Close navigation", exact: true })
+    .click();
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  await phoneNav.getByRole("button", { name: "Menu", exact: true }).click();
   await page.getByRole("dialog").evaluate(async (el) => {
     await Promise.all(el.getAnimations().map((a) => a.finished));
   });
@@ -1166,6 +1295,7 @@ try {
     "Small phone settings overflow",
   );
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await ensureThemeContrast();
   await page.screenshot({
     path: "docs/screenshots/settings-dark-mobile.png",
     fullPage: true,
@@ -1257,10 +1387,29 @@ try {
       `Mobile ${view} overflows`,
     );
   }
+  await page.goto(base);
+  await page.getByRole("heading", { name: "Your workday, Amnan." }).waitFor();
+  await page.getByRole("button", { name: "Widgets", exact: true }).click();
+  await page.getByRole("checkbox", { name: /^Goals / }).uncheck();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  assert.equal(await widget("goals").count(), 0);
   await page.request.post(`${base}/api/auth/demo`, {
     headers: { Origin: base },
     data: { role: "employee" },
   });
+  await page.goto(base);
+  await widget("goals").waitFor();
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Add employee", exact: true })
+      .count(),
+    0,
+  );
+  assert(
+    !(await page.locator(".dashboard-metrics").textContent()).includes(
+      "Open roles",
+    ),
+  );
   await page.goto(`${base}/?view=my-profile`);
   await page
     .getByRole("heading", { name: "My profile", exact: true })
@@ -1324,6 +1473,10 @@ try {
     JSON.stringify(
       {
         desktop: true,
+        dashboardWidgets: true,
+        widgetPreferencePersistence: true,
+        accountScopedPreferences: true,
+        phoneHubNavigation: true,
         mobile: true,
         publicApplications: true,
         assessmentSubmission: true,

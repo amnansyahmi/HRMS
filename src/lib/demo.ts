@@ -13,6 +13,7 @@ import { fail } from "./errors";
 import type { Actor, Role } from "./types";
 import { cookies } from "next/headers";
 import { localDate } from "./calculations";
+import { addCalendarDays } from "./hr-calendar";
 
 export async function demoLogin(role: Role = "owner") {
   if (!demoEnabled()) fail("Demo mode is unavailable on this deployment", 404);
@@ -133,11 +134,16 @@ export async function demoLogin(role: Role = "owner") {
         );
       }
     }
-    const now = new Date(),
-      today = localDate(now, "Asia/Kuala_Lumpur"),
-      future = new Date(now.getTime() + 7 * 86400000)
-        .toISOString()
-        .slice(0, 10);
+    const today = localDate(new Date(), defaultSettings.timezone);
+    let future = addCalendarDays(today, 7);
+    // The sample request must remain approvable when demo login happens on a weekend.
+    while (
+      !defaultSettings.workDays.includes(
+        new Date(future + "T00:00:00Z").getUTCDay(),
+      ) ||
+      defaultSettings.holidays.some((holiday) => holiday === future)
+    )
+      future = addCalendarDays(future, 1);
     await insertRecord(tx, actor, "shift", {
       name: "Office hours",
       start: "09:00",
