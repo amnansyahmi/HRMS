@@ -57,6 +57,48 @@ describe("ai-nonymauz-cloud transport", () => {
     });
   });
 
+  it("sends image parts through the configured vision alias", async () => {
+    const mock = vi.fn(async () =>
+      Response.json({
+        id: "vision",
+        model: "vision-alias",
+        choices: [
+          {
+            message: { role: "assistant", content: "Photo received." },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+      }),
+    );
+    vi.stubGlobal("fetch", mock);
+    const result = await completeAI("Describe this image", undefined, {
+      model: "vision-alias",
+      mode: "vision",
+      images: [
+        { bytes: Buffer.from([255, 216, 255, 217]), mime: "image/jpeg" },
+      ],
+    });
+    expect(result.usage.totalTokens).toBe(12);
+    const body = JSON.parse(
+      String((mock.mock.calls[0] as unknown as [unknown, RequestInit])[1].body),
+    );
+    expect(body).toMatchObject({
+      model: "vision-alias",
+      mode: "vision",
+      stream: false,
+      use_rag: false,
+      use_tools: false,
+    });
+    expect(body.messages[1].content).toEqual([
+      { type: "text", text: "Describe this image" },
+      {
+        type: "image_url",
+        image_url: { url: "data:image/jpeg;base64,/9j/2Q==" },
+      },
+    ]);
+  });
+
   it.each([
     [401, 503, "rejected its API key"],
     [403, 503, "rejected its API key"],

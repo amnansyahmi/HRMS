@@ -3207,3 +3207,261 @@ describe("deterministic assistant lookups", () => {
     ).toMatchObject({ availableMYR: 70 });
   });
 });
+
+import { aiAttachments } from "@/lib/ai-attachments";
+import { reserveAIUsage, finishAIUsage, aiUsage } from "@/lib/ai-usage";
+import { buildHRDigest } from "@/lib/hr-digest";
+describe("workspace enhancement permissions", () => {
+  it("keeps chat attachments private to their uploader and workspace", async () => {
+    const file = await uploadFile(
+      owner,
+      new File(["Private attachment"], "private.txt"),
+    );
+    expect((await aiAttachments(owner, [file.id]))[0].extracted_text).toBe(
+      "Private attachment",
+    );
+    await expect(
+      aiAttachments(employeeActor(), [file.id]),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(aiAttachments(other, [file.id])).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+  it("reserves monthly AI capacity atomically and records safe usage totals", async () => {
+    const current = await getCompany(owner);
+    const count = (await aiUsage(owner)).requests;
+    await db.query("UPDATE companies SET settings=$1 WHERE id=$2", [
+      JSON.stringify({
+        ...current.settings,
+        aiRouting: {
+          generalModel: "",
+          analysisModel: "",
+          visionModel: "",
+          monthlyRequestLimit: count + 1,
+        },
+      }),
+      owner.companyId,
+    ]);
+    try {
+      const results = await Promise.allSettled([
+        reserveAIUsage(owner, "hr", "test"),
+        reserveAIUsage(owner, "hr", "test"),
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const success = results.find(
+        (r) => r.status === "fulfilled",
+      ) as PromiseFulfilledResult<string>;
+      await finishAIUsage(success.value, "Succeeded", 120, {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+      });
+      expect((await aiUsage(owner)).requests).toBe(count + 1);
+      await expect(aiUsage(employeeActor())).rejects.toMatchObject({
+        status: 403,
+      });
+      expect((await aiUsage(other)).requests).toBe(0);
+    } finally {
+      await db.query("UPDATE companies SET settings=$1 WHERE id=$2", [
+        JSON.stringify(current.settings),
+        owner.companyId,
+      ]);
+    }
+  });
+  it("requires fresh private attendance photos at both clock actions and uses server time", async () => {
+    const e = await freshEmployee(),
+      actor = asEmployee(e),
+      current = await getCompany(owner);
+    await db.query("UPDATE companies SET settings=$1 WHERE id=$2", [
+      JSON.stringify({
+        ...current.settings,
+        attendanceEvidence: { photoRequired: true, locationRequired: true },
+      }),
+      owner.companyId,
+    ]);
+    const coordinates = { latitude: 3.14, longitude: 101.69, accuracy: 20 };
+    const photo = () =>
+      uploadFile(
+        actor,
+        new File([Buffer.from([255, 216, 255, 217])], "clock.jpg"),
+      );
+    try {
+      await expect(clock(actor, { action: "in", coordinates })).rejects.toThrow(
+        "Take a photo",
+      );
+      const foreign = await uploadFile(
+        other,
+        new File([Buffer.from([255, 216, 255, 217])], "foreign.jpg"),
+      );
+      await expect(
+        clock(actor, {
+          action: "in",
+          coordinates,
+          photoId: foreign.id,
+          capturedAt: new Date().toISOString(),
+        }),
+      ).rejects.toThrow("fresh attendance photo");
+      const file = await photo(),
+        capturedAt = new Date(Date.now() - 60000).toISOString();
+      const opened = await clock(actor, {
+        action: "in",
+        coordinates,
+        photoId: file.id,
+        capturedAt,
+      });
+      expect(Date.parse(String(opened.data.clockIn))).toBeGreaterThan(
+        Date.parse(capturedAt),
+      );
+      expect(opened.data.clockInEvidence).toMatchObject({
+        photoId: file.id,
+        capturedAt,
+      });
+      expect((await downloadFile(owner, file.id)).status).toBe(200);
+      await expect(downloadFile(other, file.id)).rejects.toMatchObject({
+        status: 404,
+      });
+      await expect(
+        clock(actor, {
+          action: "out",
+          coordinates,
+          photoId: file.id,
+          capturedAt: new Date().toISOString(),
+        }),
+      ).rejects.toThrow("new photo");
+      const second = await photo();
+      await expect(
+        clock(actor, {
+          action: "out",
+          photoId: second.id,
+          capturedAt: new Date().toISOString(),
+        }),
+      ).rejects.toThrow("fresh phone location");
+      const closed = await clock(actor, {
+        action: "out",
+        coordinates,
+        photoId: second.id,
+        capturedAt: new Date().toISOString(),
+      });
+      expect(closed.data.clockOutEvidence).toMatchObject({
+        photoId: second.id,
+      });
+    } finally {
+      await db.query("UPDATE companies SET settings=$1 WHERE id=$2", [
+        JSON.stringify(current.settings),
+        owner.companyId,
+      ]);
+    }
+  });
+  it("deduplicates scheduled digests for a recipient and date", async () => {
+    const current = await getCompany(owner);
+    await db.query("UPDATE companies SET settings=$1 WHERE id=$2", [
+      JSON.stringify({
+        ...current.settings,
+        digest: { enabled: true, frequency: "daily", hour: 0 },
+      }),
+      owner.companyId,
+    ]);
+    try {
+      expect(
+        buildHRDigest(owner, current, await visibleRecords(owner)).total,
+      ).toBeGreaterThanOrEqual(0);
+      await maintenance();
+      await maintenance();
+      const rows = (
+        await db.query<{ count: string }>(
+          "SELECT count(*) AS count FROM notifications WHERE company_id=$1 AND user_id=$2 AND title='Your HR digest'",
+          [owner.companyId, owner.userId],
+        )
+      ).rows;
+      expect(Number(rows[0].count)).toBe(1);
+    } finally {
+      await db.query("UPDATE companies SET settings=$1 WHERE id=$2", [
+        JSON.stringify(current.settings),
+        owner.companyId,
+      ]);
+    }
+  });
+});
+
+it("sends selected private document evidence and keeps cross-company focus out of AI", async () => {
+  const current = await getCompany(owner),
+    e = await freshEmployee();
+  await db.query("UPDATE companies SET settings=$1 WHERE id=$2", [
+    JSON.stringify({ ...current.settings, aiEnabled: true }),
+    owner.companyId,
+  ]);
+  const file = await uploadFile(
+    owner,
+    new File(["Attachment evidence for this review."], "evidence.txt"),
+  );
+  const mock = vi.fn(async () =>
+    Response.json({
+      id: "attachment-test",
+      model: "test-alias",
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: `Review this evidence [source:${file.id}]`,
+          },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 },
+    }),
+  );
+  vi.stubGlobal("fetch", mock);
+  vi.stubEnv("AI_NONYMAUZ_BASE_URL", "https://nonymauz.example/v1");
+  vi.stubEnv("AI_NONYMAUZ_API_KEY", "test-key");
+  vi.stubEnv("AI_NONYMAUZ_MODEL", "test-alias");
+  try {
+    const reply = await askAI(owner, {
+      message: "Review this selected employee with my attachment.",
+      recordId: e.id,
+      fileIds: [file.id],
+    });
+    const request = JSON.parse(
+      String((mock.mock.calls[0] as unknown as [unknown, RequestInit])[1].body),
+    );
+    expect(JSON.stringify(request.messages)).toContain(
+      "Attachment evidence for this review.",
+    );
+    expect(JSON.stringify(request.messages)).toContain(
+      `Focus on the selected employee record ${e.id}`,
+    );
+    expect(request.mode).toBe("deep");
+    expect(reply.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: file.id, kind: "attachment" }),
+      ]),
+    );
+    expect(await aiHistory(owner, reply.threadId)).toHaveLength(2);
+    const foreign = await createRecord(other, "employee", {
+      data: empData("Other workspace", `${randomUUID()}@example.test`),
+    });
+    await expect(
+      askAI(owner, { message: "Review", recordId: foreign.id }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(mock).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    await db.query("UPDATE companies SET settings=$1 WHERE id=$2", [
+      JSON.stringify(current.settings),
+      owner.companyId,
+    ]);
+  }
+});
+
+it("allows separate work sessions on one date while retaining one open clock", async () => {
+  const actor = asEmployee(await freshEmployee());
+  const first = await clock(actor, { action: "in", location: "Remote" });
+  await clock(actor, { action: "out" });
+  const second = await clock(actor, { action: "in", location: "Remote" });
+  expect(second.id).not.toBe(first.id);
+  expect(second.data.workDate).toBe(first.data.workDate);
+  await expect(clock(actor, { action: "in" })).rejects.toMatchObject({
+    status: 409,
+  });
+  await clock(actor, { action: "out" });
+});

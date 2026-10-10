@@ -1,6 +1,12 @@
 "use client";
 import { useState } from "react";
-import { Pencil, Building2, ArrowUpRight, Download } from "lucide-react";
+import {
+  Pencil,
+  Building2,
+  ArrowUpRight,
+  Download,
+  MessageSquare,
+} from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,7 +28,7 @@ import {
 import { money, shortDate } from "@/lib/client";
 import { isStaff, type HRRecord } from "@/lib/types";
 export function PeoplePage() {
-  const { workspace, edit } = useWorkspace(),
+  const { workspace, edit, ask } = useWorkspace(),
     [search, setSearch] = useState(""),
     [tab, setTab] = useState("employees"),
     [selected, setSelected] = useState<HRRecord | null>(null),
@@ -264,6 +270,20 @@ export function PeoplePage() {
                   </>
                 ) : null}
               </dl>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  ask(
+                    "hr",
+                    selected.id,
+                    "Help me review this employee profile and any follow-ups that need attention.",
+                  );
+                  setSelected(null);
+                }}
+              >
+                <MessageSquare size={16} />
+                Ask AI about this employee
+              </Button>
               {staff ? (
                 <Button
                   onClick={() => {

@@ -121,6 +121,15 @@ export async function getCompany(
         ...company.settings.aiSpecialists,
       },
       aiAgents: { ...defaultSettings.aiAgents, ...company.settings.aiAgents },
+      aiRouting: {
+        ...defaultSettings.aiRouting,
+        ...company.settings.aiRouting,
+      },
+      attendanceEvidence: {
+        ...defaultSettings.attendanceEvidence,
+        ...company.settings.attendanceEvidence,
+      },
+      digest: { ...defaultSettings.digest, ...company.settings.digest },
     },
   };
 }
@@ -133,6 +142,14 @@ export const defaultSettings = {
   employeeTypes: ["Full-time", "Part-time", "Contract", "Intern"],
   clockReminderMinutes: 15,
   aiSpecialists: defaultSpecialists,
+  aiRouting: {
+    generalModel: "",
+    analysisModel: "",
+    visionModel: "",
+    monthlyRequestLimit: 0,
+  },
+  digest: { enabled: false, frequency: "daily" as const, hour: 8 },
+  attendanceEvidence: { photoRequired: false, locationRequired: false },
   aiEnabled: false,
   aiActionsEnabled: false,
   aiAgents: {

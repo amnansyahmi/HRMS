@@ -22,6 +22,7 @@ const tables = [
   "audio_uploads",
   "media_jobs",
   "ai_proposals",
+  "ai_usage",
 ] as const;
 const [mode, file, confirm] = process.argv.slice(2),
   key = process.env.BACKUP_ENCRYPTION_KEY;

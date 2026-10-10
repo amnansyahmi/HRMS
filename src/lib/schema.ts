@@ -419,6 +419,44 @@ export const companySettings = z.object({
       }),
     )
     .default(defaultSpecialists),
+  attendanceEvidence: z
+    .object({ photoRequired: z.boolean(), locationRequired: z.boolean() })
+    .default({ photoRequired: false, locationRequired: false }),
+  aiRouting: z
+    .object({
+      generalModel: z
+        .string()
+        .trim()
+        .max(160)
+        .regex(/^[a-zA-Z0-9_./:-]*$/)
+        .default(""),
+      analysisModel: z
+        .string()
+        .trim()
+        .max(160)
+        .regex(/^[a-zA-Z0-9_./:-]*$/)
+        .default(""),
+      visionModel: z
+        .string()
+        .trim()
+        .max(160)
+        .regex(/^[a-zA-Z0-9_./:-]*$/)
+        .default(""),
+      monthlyRequestLimit: z.number().int().min(0).max(100000).default(0),
+    })
+    .default({
+      generalModel: "",
+      analysisModel: "",
+      visionModel: "",
+      monthlyRequestLimit: 0,
+    }),
+  digest: z
+    .object({
+      enabled: z.boolean().default(false),
+      frequency: z.enum(["daily", "weekly"]).default("daily"),
+      hour: z.number().int().min(0).max(23).default(8),
+    })
+    .default({ enabled: false, frequency: "daily", hour: 8 }),
   aiEnabled: z.boolean(),
   aiActionsEnabled: z.boolean().default(false),
   aiAgents: z

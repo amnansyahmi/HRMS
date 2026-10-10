@@ -55,6 +55,10 @@ it("round-trips an encrypted backup, preserves private bytes and revokes session
       "INSERT INTO files(id,company_id,uploaded_by,filename,mime,bytes,size) VALUES($1,$2,$3,'private.bin','application/octet-stream',$4,5)",
       [randomUUID(), company, user, Buffer.from([0, 1, 2, 255, 3])],
     );
+    await database.query(
+      "INSERT INTO ai_usage(id,company_id,user_id,mode,model,status,total_tokens,response_ms) VALUES($1,$2,$3,'hr','test-model','Succeeded',15,120)",
+      [randomUUID(), company, user],
+    );
     await database.close();
     database = undefined;
     await run(
@@ -109,6 +113,10 @@ it("round-trips an encrypted backup, preserves private bytes and revokes session
     expect(
       (await database.query("SELECT token_hash FROM sessions")).rows,
     ).toHaveLength(0);
+    expect(
+      (await database.query("SELECT model,status,total_tokens FROM ai_usage"))
+        .rows,
+    ).toEqual([{ model: "test-model", status: "Succeeded", total_tokens: 15 }]);
     const bytes = (
       await database.query<{ bytes: Uint8Array }>("SELECT bytes FROM files")
     ).rows[0].bytes;

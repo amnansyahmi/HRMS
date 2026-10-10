@@ -139,3 +139,21 @@ AI letter cards show complete wording, title and date. Confirm saves exactly tha
 Settings uses a section menu on desktop and a labelled section picker on phones. General, People rules, Account security, Team access, AI connection, Deployment setup and Activity retain their existing role permissions. People and AI controls appear inside their own sections. Forms use readable spacing and the shared interface follows the device light/dark preference with SVG icons and larger phone touch targets.
 
 Workspace owners can use **AI connection → Check connection** to query the configured backend’s `/v1/models` catalogue. This sends no prompts or employee records, checks the configured alias, limits calls to ten per hour, and returns no URL or credential. A listed model does not certify successful generation. Server instructions are collapsed behind a disclosure. The provider adapter explicitly requests JSON because ai-nonymauz-cloud defaults to streaming.
+
+## Workspace navigation and daily work
+
+The sidebar groups pages under People, Time & leave, Pay & claims, Performance, Hiring and Knowledge. Home, Approval inbox and People AI stay directly accessible. HR policies live in Settings; profile access is available from the account button. Existing view URLs continue to work. Mobile Settings includes a back arrow, and browser Back follows page history without saving unsaved fields.
+
+Leave shows balances, a compact personal month calendar and request history. Both calendars have tappable days, approved/pending event dots and a selected-day summary on phones. The form uses a single leave-type selector for standard and eligible custom policies; hourly fields appear only for hourly leave. A working-day/balance preview is advisory and server validation still checks eligibility, overlap and entitlements.
+
+KretivOS's attendance and leave interfaces informed these flows. Attendance supports live camera capture and optional owner-required photo/GPS evidence at both clock actions. Photos use authenticated private downloads; uploads must belong to the clocking account, be under 500 KB and be fresh, with a new photo for every action. The server supplies clock times and allows separate work sessions on one date while enforcing one open clock per employee. Photo/GPS evidence does not prove identity or physical presence. Camera requires HTTPS and browser permission.
+
+## AI files, routing and usage
+
+People AI accepts up to three private TXT/PDF/DOCX/PNG/JPEG attachments. Review extracted document text before sending. Text documents use the analysis route; images require an owner-selected vision-capable alias. Uploads remain private to their uploader unless separately linked to an authorized HR record. Explicitly attached content is sent to the configured backend. Scanned PDFs need an image or externally extracted text.
+
+Settings → People AI offers separate general, analysis and vision aliases from Check connection's live catalogue. A monthly request budget counts attempted, failed and pending requests in the UTC calendar month. Zero removes this additional cap; per-user rate limits remain. Usage shows provider-reported tokens and response times without inventing monetary costs. The additive `ai_usage` table is applied by the existing migration runner and included in encrypted backups.
+
+Home's HR digest calculates overdue approvals, document expiries, employment end dates, incomplete lifecycle tasks, goals and meeting actions from currently authorized records. Owner-configured daily/weekly reminders use the existing authenticated `/api/cron` processor and notification/email outbox. They require an external scheduler with `CRON_SECRET`; email additionally needs SMTP configuration. No automatic AI generation runs in the digest. Repeated processing deduplicates each recipient/date.
+
+Payroll's read-only checks flag stale totals, repeated claim/overtime allocations, missing bank/tax-verification details and monthly gross changes over 20% and RM100. These checks supplement the existing review and publication rules. Contextual Ask AI buttons explain an employee, request or draft using its authorized records and server-calculated findings; proposed changes still require separate confirmation.

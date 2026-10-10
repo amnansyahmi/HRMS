@@ -16,6 +16,8 @@ import {
   Settings2,
   Loader2,
   FileText,
+  Paperclip,
+  X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -71,6 +73,14 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
     [history, setHistory] = useState<Message[]>([]),
     [threadId, setThreadId] = useState<string | undefined>(),
     [busy, setBusy] = useState(false),
+    [uploading, setUploading] = useState(false),
+    [attachments, setAttachments] = useState<
+      { id: string; filename: string; text: string; size: number }[]
+    >([]),
+    [preview, setPreview] = useState<{ filename: string; text: string } | null>(
+      null,
+    ),
+    attachmentInput = useRef<HTMLInputElement>(null),
     [historyOpen, setHistoryOpen] = useState(false),
     [optionsOpen, setOptionsOpen] = useState(false),
     frame = useRef<HTMLDivElement>(null),
@@ -211,14 +221,45 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
     setThreadId(undefined);
     setMessage("");
     setRecordId("");
+    setAttachments([]);
     setMode("hr");
     setHistoryOpen(false);
     setOptionsOpen(false);
     input.current?.focus();
   }
+  async function uploadAttachment(file?: File) {
+    if (!file || uploading || busy) return;
+    if (attachments.length >= 3) {
+      toast.error("Attach up to three files per chat");
+      return;
+    }
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const result = await api<{
+        id: string;
+        filename: string;
+        text: string;
+        size: number;
+      }>("/api/files", form);
+      setAttachments((old) => [...old, result]);
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setUploading(false);
+      if (attachmentInput.current) attachmentInput.current.value = "";
+    }
+  }
   async function send(event?: React.FormEvent) {
     event?.preventDefault();
-    if (!message.trim() || busy || !configured || (requiresRecord && !recordId))
+    if (
+      !message.trim() ||
+      busy ||
+      uploading ||
+      !configured ||
+      (requiresRecord && !recordId)
+    )
       return;
     const current = message.trim(),
       old = messages;
@@ -235,6 +276,7 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
           mode,
           recordId: recordId || undefined,
           threadId,
+          fileIds: attachments.map((file) => file.id),
         }),
         signal: abort.current.signal,
       });
@@ -331,7 +373,7 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                     options={modes}
                   />
                 </label>
-                {requiresRecord ? (
+                {requiresRecord || recordId ? (
                   <label className="chat-option-field">
                     <span>Record to review</span>
                     <NativeSelect
@@ -646,6 +688,52 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                   <ChevronDown size={13} />
                 </button>
               ) : null}
+              {!requiresRecord && recordId ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => setRecordId("")}
+                >
+                  Clear selected record
+                </Button>
+              ) : null}
+              {attachments.length ? (
+                <div className="chat-attachments">
+                  {attachments.map((file) => (
+                    <div className="chat-attachment" key={file.id}>
+                      <button type="button" onClick={() => setPreview(file)}>
+                        <FileText size={14} />
+                        {file.filename}
+                      </button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Remove ${file.filename}`}
+                        disabled={busy}
+                        onClick={() =>
+                          setAttachments((old) =>
+                            old.filter((item) => item.id !== file.id),
+                          )
+                        }
+                      >
+                        <X size={14} />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <input
+                type="file"
+                hidden
+                ref={attachmentInput}
+                accept=".txt,.pdf,.docx,.png,.jpg,.jpeg"
+                onChange={(event) =>
+                  void uploadAttachment(event.target.files?.[0])
+                }
+              />
               <Textarea
                 ref={input}
                 aria-label="Message People AI"
@@ -666,17 +754,33 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                 }}
               />
               <div className="composer-toolbar">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Chat options"
-                  title="Choose an assistant or record"
-                  onClick={() => setOptionsOpen(true)}
-                  disabled={busy}
-                >
-                  <Settings2 size={18} />
-                </Button>
+                <div className="composer-left-tools">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Attach a file"
+                    disabled={busy || uploading || attachments.length >= 3}
+                    onClick={() => attachmentInput.current?.click()}
+                  >
+                    {uploading ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <Paperclip size={18} />
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Chat options"
+                    title="Choose an assistant or record"
+                    onClick={() => setOptionsOpen(true)}
+                    disabled={busy}
+                  >
+                    <Settings2 size={18} />
+                  </Button>
+                </div>
                 <div className="composer-send-tools">
                   <Dictation
                     compact
@@ -701,6 +805,7 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                       aria-label="Send message"
                       title="Send (Ctrl / ⌘ + Enter)"
                       disabled={
+                        uploading ||
                         !configured ||
                         !message.trim() ||
                         (requiresRecord && !recordId)
@@ -712,6 +817,36 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                 </div>
               </div>
             </form>
+            {attachments.length ? (
+              <p className="composer-foot">
+                Files are private to your account. Sending shares their contents
+                with your configured AI provider. Images require an
+                owner-selected vision model.
+              </p>
+            ) : null}
+            <Dialog
+              open={!!preview}
+              onOpenChange={(open) => {
+                if (!open) setPreview(null);
+              }}
+            >
+              <DialogContent>
+                <DialogTitle>{preview?.filename}</DialogTitle>
+                <DialogDescription>
+                  Review extracted text before sending. Scanned PDFs need a
+                  readable image or OCR.
+                </DialogDescription>
+                <Textarea
+                  aria-label="Attachment text preview"
+                  readOnly
+                  rows={12}
+                  value={
+                    preview?.text ||
+                    "Image attachment. The image will be sent to the owner-selected vision model when you send the message."
+                  }
+                />
+              </DialogContent>
+            </Dialog>
             {messages.length ? (
               <p className="composer-foot">
                 AI can make mistakes. Review important details.

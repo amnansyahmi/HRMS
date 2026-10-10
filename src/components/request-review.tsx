@@ -71,7 +71,7 @@ export function RequestReviewDialog({
   initialDecision?: ReviewDecision;
   onClose: () => void;
 }) {
-  const { workspace, act } = useWorkspace();
+  const { workspace, act, ask } = useWorkspace();
   const options = reviewOptions(workspace.actor, record, workspace.records);
   const [decision, setDecision] = useState<ReviewDecision | "">(
     initialDecision || options[0] || "",
@@ -231,6 +231,24 @@ export function RequestReviewDialog({
           </p>
         )}
         <DialogFooter>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              ask(
+                record.kind === "claim"
+                  ? "claims"
+                  : record.kind === "leave"
+                    ? "leave"
+                    : "hr",
+                record.id,
+                "Explain this request, its policy and any details I should verify before deciding.",
+              );
+              onClose();
+            }}
+          >
+            Ask AI about this request
+          </Button>
           <Button variant="outline" disabled={busy} onClick={onClose}>
             Back
           </Button>

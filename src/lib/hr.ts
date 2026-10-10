@@ -25,6 +25,7 @@ import { payrollInputs } from "./payroll-inputs";
 import { companyHolidays } from "./policies";
 import { notify, queueEmail } from "./notifications";
 import { schemas } from "./schema";
+import { clockEvidenceInput, attendanceEvidence } from "./attendance-evidence";
 import { fail } from "./errors";
 import {
   payrollTotals,
@@ -1024,6 +1025,7 @@ export async function clock(actor: Actor, input: unknown) {
   const body = z
     .object({
       action: z.enum(["in", "out"]),
+      ...clockEvidenceInput,
       location: z.enum(["Office", "Remote", "Client site"]).default("Office"),
       locationId: z.uuid().nullable().default(null),
       coordinates: z
@@ -1057,9 +1059,14 @@ export async function clock(actor: Actor, input: unknown) {
         [actor.companyId, actor.employeeId],
       )
     ).rows[0];
+    const evidence = await attendanceEvidence(tx, actor, company, body, now);
     if (body.action === "out") {
       if (!open) fail("You have no open clock-in", 409);
-      const data = { ...open.data, clockOut: now.toISOString() };
+      const data = {
+        ...open.data,
+        clockOut: now.toISOString(),
+        clockOutEvidence: evidence,
+      };
       const closed = (
         await tx.query<HRRecord>(
           "UPDATE hr_records SET data=$1,updated_at=now() WHERE id=$2 AND company_id=$3 RETURNING *",
@@ -1121,6 +1128,7 @@ export async function clock(actor: Actor, input: unknown) {
         location: body.location,
         locationId: body.locationId,
         coordinates: body.coordinates,
+        clockInEvidence: evidence,
       },
       actor.employeeId,
     );

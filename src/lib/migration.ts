@@ -32,10 +32,13 @@ CREATE INDEX IF NOT EXISTS ai_user_thread ON ai_messages(company_id, user_id, th
 CREATE INDEX IF NOT EXISTS audit_company ON audit_log(company_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS employee_email ON hr_records(company_id, (data->>'email')) WHERE kind='employee';
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_attendance ON hr_records(company_id, employee_id) WHERE kind='attendance' AND data->>'clockOut' IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS attendance_day ON hr_records(company_id, employee_id, (data->>'workDate')) WHERE kind='attendance';
+DROP INDEX IF EXISTS attendance_day;
+CREATE INDEX IF NOT EXISTS attendance_day_lookup ON hr_records(company_id, employee_id, (data->>'workDate')) WHERE kind='attendance';
 DROP INDEX IF EXISTS payroll_period;
 CREATE UNIQUE INDEX IF NOT EXISTS payroll_run_employee ON hr_records(company_id,employee_id,(coalesce(data->>'runId',data->>'period'))) WHERE kind='payroll';
 CREATE UNIQUE INDEX IF NOT EXISTS candidate_job_email ON hr_records(company_id, (data->>'jobId'), (data->>'email')) WHERE kind='candidate';
 
+CREATE TABLE IF NOT EXISTS ai_usage(id uuid PRIMARY KEY,company_id uuid NOT NULL REFERENCES companies(id),user_id uuid NOT NULL REFERENCES users(id),mode text NOT NULL,model text NOT NULL,status text NOT NULL,response_ms int,input_tokens bigint,output_tokens bigint,total_tokens bigint,error_status int,created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS ai_usage_company_month ON ai_usage(company_id,created_at);
 CREATE INDEX IF NOT EXISTS hr_records_page_idx ON hr_records(company_id,created_at DESC,id);
 `;

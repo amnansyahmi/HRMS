@@ -15,6 +15,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { api, money } from "@/lib/client";
+import { workingDays, localDate } from "@/lib/calculations";
+import { leaveEntitlement } from "@/lib/leave-entitlement";
 import { sameClaimPeriod } from "@/lib/claim-period";
 import { toast } from "sonner";
 import { useWorkspace } from "./workspace-context";
@@ -695,6 +697,56 @@ export function RecordForm({
         )
         .reduce((sum, r) => sum + Number(r.data.amount), 0)
     : 0;
+  const leaveEmployee = employees.find((e) => e.id === employeeId);
+  const leavePolicies = workspace.records.filter(
+    (r) =>
+      r.kind === "leave_type" &&
+      (!r.data.departmentId ||
+        r.data.departmentId === leaveEmployee?.data.departmentId),
+  );
+  const leavePolicy =
+    leavePolicies.find((r) => r.id === data.leaveTypeId) || null;
+  let leavePreview: string | null = null;
+  if (kind === "leave" && leaveEmployee && data.startDate && data.endDate) {
+    try {
+      const holidays = [
+        ...workspace.company.settings.holidays,
+        ...workspace.records
+          .filter(
+            (r) =>
+              r.kind === "holiday" &&
+              (r.data.state === "National" ||
+                r.data.state === leaveEmployee.data.state),
+          )
+          .map((r) => String(r.data.date)),
+      ];
+      const working = workingDays(
+        String(data.startDate),
+        String(data.endDate),
+        workspace.company.settings.workDays,
+        holidays,
+      );
+      const days =
+        working *
+        (data.unit === "Morning" || data.unit === "Afternoon"
+          ? 0.5
+          : data.unit === "Hours"
+            ? Number(data.hours) / Number(leaveEmployee.data.hoursPerDay || 8)
+            : 1);
+      const balance = leaveEntitlement(
+        leaveEmployee,
+        leavePolicy,
+        String(data.type),
+        String(data.startDate),
+        localDate(new Date(), workspace.company.settings.timezone),
+        workspace.records.filter(
+          (r) => r.kind === "leave" && r.id !== record?.id,
+        ),
+      );
+      if (Number.isFinite(days))
+        leavePreview = `${Number(days.toFixed(2))} working days requested${balance ? ` · ${balance.available} days available before this request` : ""}. Dates and balance are rechecked on submission.`;
+    } catch {}
+  }
   return (
     <Dialog
       open
@@ -716,6 +768,11 @@ export function RecordForm({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={save}>
+          {leavePreview ? (
+            <p className="info-note mb-4" role="status">
+              {leavePreview}
+            </p>
+          ) : null}
           {claimPolicy ? (
             <div className="info-note mb-4">
               <strong>
@@ -778,31 +835,49 @@ export function RecordForm({
             ) : null}
             {(fields[kind] || [])
               .filter(
-                (f) => !selfGoal || ["progress", "status"].includes(f.key),
+                (f) =>
+                  (!selfGoal || ["progress", "status"].includes(f.key)) &&
+                  (kind !== "leave" ||
+                    (f.key !== "leaveTypeId" &&
+                      (!["hours", "startHour"].includes(f.key) ||
+                        data.unit === "Hours"))),
               )
               .map((f) => {
                 const id = `field-${f.key}`;
-                const options = f.source
-                  ? workspace.records
-                      .filter((r) => r.kind === f.source && r.id !== record?.id)
-                      .map((r) => ({
-                        value: r.id,
-                        label: String(
-                          r.data.name ||
-                            r.data.title ||
-                            r.data.workDate ||
-                            r.data.description ||
-                            r.kind,
+                const options =
+                  kind === "leave" && f.key === "type"
+                    ? [
+                        ...["Annual", "Sick", "Unpaid", "Other"].map(
+                          (value) => ({ value, label: value }),
                         ),
-                      }))
-                  : (kind === "employee" && f.key === "employmentStatus"
-                      ? workspace.company.settings.employeeStatuses.map(
-                          (s) => s.name,
-                        )
-                      : kind === "employee" && f.key === "employmentType"
-                        ? workspace.company.settings.employeeTypes
-                        : f.options || []
-                    ).map((v) => ({ value: v, label: v }));
+                        ...leavePolicies.map((p) => ({
+                          value: p.id,
+                          label: String(p.data.name),
+                        })),
+                      ]
+                    : f.source
+                      ? workspace.records
+                          .filter(
+                            (r) => r.kind === f.source && r.id !== record?.id,
+                          )
+                          .map((r) => ({
+                            value: r.id,
+                            label: String(
+                              r.data.name ||
+                                r.data.title ||
+                                r.data.workDate ||
+                                r.data.description ||
+                                r.kind,
+                            ),
+                          }))
+                      : (kind === "employee" && f.key === "employmentStatus"
+                          ? workspace.company.settings.employeeStatuses.map(
+                              (s) => s.name,
+                            )
+                          : kind === "employee" && f.key === "employmentType"
+                            ? workspace.company.settings.employeeTypes
+                            : f.options || []
+                        ).map((v) => ({ value: v, label: v }));
                 return (
                   <div
                     key={f.key}
@@ -843,16 +918,34 @@ export function RecordForm({
                         id={id}
                         className="native-select"
                         required={f.required}
-                        value={String(data[f.key] || "")}
+                        value={String(
+                          kind === "leave" && f.key === "type"
+                            ? data.leaveTypeId || data.type || "Annual"
+                            : data[f.key] || "",
+                        )}
                         onChange={(e) =>
-                          change(
-                            f.key,
-                            f.key === "rating"
-                              ? e.target.value
-                                ? Number(e.target.value)
-                                : null
-                              : e.target.value || null,
-                          )
+                          kind === "leave" && f.key === "type"
+                            ? setData((d) => ({
+                                ...d,
+                                type: String(
+                                  leavePolicies.find(
+                                    (p) => p.id === e.target.value,
+                                  )?.data.name || e.target.value,
+                                ),
+                                leaveTypeId: leavePolicies.some(
+                                  (p) => p.id === e.target.value,
+                                )
+                                  ? e.target.value
+                                  : null,
+                              }))
+                            : change(
+                                f.key,
+                                f.key === "rating"
+                                  ? e.target.value
+                                    ? Number(e.target.value)
+                                    : null
+                                  : e.target.value || null,
+                              )
                         }
                       >
                         {f.source || f.key === "rating" ? (

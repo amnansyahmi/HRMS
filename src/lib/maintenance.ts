@@ -1,3 +1,6 @@
+import { buildHRDigest } from "./hr-digest";
+import { getCompany } from "./auth";
+import { visibleRecords } from "./hr";
 import { leavePortion } from "./policies";
 import { randomUUID } from "node:crypto";
 import { db, transaction } from "./db";
@@ -35,11 +38,48 @@ export async function maintenance() {
           employee_id: string | null;
           role: string;
           email: string;
+          name: string;
+          payroll_access:
+            import("./workflow-config").PayrollCapability[] | null;
         }>(
-          "SELECT m.*,u.email FROM memberships m JOIN users u ON u.id=m.user_id WHERE company_id=$1",
+          "SELECT m.*,u.email,u.name FROM memberships m JOIN users u ON u.id=m.user_id WHERE company_id=$1",
           [company.id],
         )
       ).rows;
+    const digestConfig = company.settings.digest;
+    if (
+      digestConfig?.enabled &&
+      minute >= digestConfig.hour * 60 &&
+      (digestConfig.frequency !== "weekly" ||
+        new Date(day + "T00:00:00Z").getUTCDay() === 1)
+    ) {
+      for (const member of members.filter((m) =>
+        ["owner", "hr", "manager"].includes(m.role),
+      )) {
+        const actor = {
+          companyId: company.id,
+          userId: member.user_id,
+          employeeId: member.employee_id,
+          role: member.role as import("./types").Role,
+          name: member.name,
+          email: member.email,
+          payrollAccess: member.payroll_access,
+        };
+        const digest = buildHRDigest(
+          actor,
+          await getCompany(actor),
+          await visibleRecords(actor),
+        );
+        await reminder(
+          member,
+          company,
+          "Your HR digest",
+          `${digest.total} follow-ups flagged for ${day}. Open the workspace to review current details.`,
+          "/?view=overview",
+          `digest:${digestConfig.frequency}:${day}`,
+        );
+      }
+    }
     // Apply the HR-approved future employment history when its date arrives.
     await transaction(async (tx) => {
       await tx.query("SELECT id FROM companies WHERE id=$1 FOR UPDATE", [

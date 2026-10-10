@@ -1,19 +1,11 @@
 "use client";
-import { hasPayroll } from "@/lib/workflow-config";
+import { hubs, hubFor, canOpenPage } from "./workspace-navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import dynamic from "next/dynamic";
 import {
   LayoutDashboard,
-  Users,
   Clock3,
-  CalendarDays,
-  Receipt,
-  Wallet,
-  Target,
-  BriefcaseBusiness,
   ClipboardCheck,
-  FileText,
-  BookOpen,
   MessageSquare,
   Settings,
   Search,
@@ -24,6 +16,7 @@ import {
   ArrowUpRight,
   Download,
   ChevronRight,
+  ArrowLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,7 +31,7 @@ import { AuthScreen } from "./auth-screen";
 import { Loading } from "./common";
 import { WorkspaceContext, type Page } from "./workspace-context";
 import { api, ApiError, initials } from "@/lib/client";
-import { isStaff, type Workspace, type Kind, type HRRecord } from "@/lib/types";
+import { type Workspace, type Kind, type HRRecord } from "@/lib/types";
 import type { AssistantIntent } from "./assistant-page";
 import { toast } from "sonner";
 import { NotificationPanel } from "./operations-page";
@@ -94,43 +87,6 @@ const AssistantPage = dynamic(() =>
 const RecordForm = dynamic(() =>
   import("./record-form").then((m) => m.RecordForm),
 );
-const navigation = [
-  {
-    title: "Workspace",
-    items: [
-      { page: "overview", label: "Overview", icon: LayoutDashboard },
-      { page: "approvals", label: "Approval inbox", icon: ClipboardCheck },
-      { page: "calendar", label: "Team calendar", icon: CalendarDays },
-      { page: "my-profile", label: "My profile", icon: Users },
-      { page: "people", label: "People", icon: Users },
-      { page: "employee-files", label: "Employee files", icon: FileText },
-      { page: "attendance", label: "Attendance & shifts", icon: Clock3 },
-      { page: "leave", label: "Leave", icon: CalendarDays },
-      { page: "claims", label: "Claims", icon: Receipt },
-      { page: "work-requests", label: "Time requests", icon: Clock3 },
-      { page: "hr-policies", label: "HR policies", icon: CalendarDays },
-      { page: "payments", label: "Payments", icon: Wallet },
-      { page: "payroll", label: "Payroll & payslips", icon: Wallet },
-      { page: "performance", label: "Goals & evaluations", icon: Target },
-      { page: "reviews", label: "Review cycles", icon: ClipboardCheck },
-    ],
-  },
-  {
-    title: "Hiring",
-    items: [
-      { page: "recruitment", label: "Recruitment", icon: BriefcaseBusiness },
-      { page: "assessments", label: "Assessments", icon: ClipboardCheck },
-    ],
-  },
-  {
-    title: "Knowledge",
-    items: [
-      { page: "meetings", label: "Meeting notes", icon: FileText },
-      { page: "policies", label: "Company handbook", icon: BookOpen },
-      { page: "announcements", label: "Announcements", icon: MessageSquare },
-    ],
-  },
-] as const;
 const labels: Record<Page, string> = {
   approvals: "Approval inbox",
   calendar: "Team calendar",
@@ -208,15 +164,14 @@ function Sidebar({
   refresh: () => Promise<void>;
   onCollapse?: () => void;
 }) {
-  const staff = isStaff(workspace.actor),
-    pending = workspace.records.filter(
-      (r) =>
-        [...requestKinds, "profile_change"].includes(r.kind) &&
-        r.data.status === "Pending" &&
-        reviewOptions(workspace.actor, r, workspace.records).some((o) =>
-          ["Approved", "Rejected", "Returned"].includes(o),
-        ),
-    ).length;
+  const pending = workspace.records.filter(
+    (r) =>
+      [...requestKinds, "profile_change"].includes(r.kind) &&
+      r.data.status === "Pending" &&
+      reviewOptions(workspace.actor, r, workspace.records).some((o) =>
+        ["Approved", "Rejected", "Returned"].includes(o),
+      ),
+  ).length;
   return (
     <div className="sidebar-inner">
       <div className="sidebar-brand">
@@ -266,33 +221,52 @@ function Sidebar({
         <ArrowUpRight size={14} />
       </Button>
       <nav aria-label="Workspace navigation">
-        {navigation.map((group) => {
-          const items = group.items.filter((item) =>
-            item.page === "payments"
-              ? hasPayroll(workspace.actor)
-              : staff || item.page !== "recruitment",
-          );
-          if (!items.length) return null;
-          return (
-            <div className="nav-group" key={group.title}>
-              <span>{group.title}</span>
-              {items.map((item) => (
-                <button
-                  key={item.page}
-                  className={page === item.page ? "active" : ""}
-                  aria-current={page === item.page ? "page" : undefined}
-                  onClick={() => go(item.page)}
-                >
-                  <item.icon size={17} />
-                  {item.label}
-                  {item.page === "approvals" && pending ? (
-                    <small>{pending}</small>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          );
-        })}
+        <div className="nav-group">
+          {(
+            [
+              { page: "overview", label: "Home", icon: LayoutDashboard },
+              {
+                page: "approvals",
+                label: "Approval inbox",
+                icon: ClipboardCheck,
+              },
+            ] as const
+          ).map((item) => (
+            <button
+              key={item.page}
+              className={page === item.page ? "active" : ""}
+              aria-current={page === item.page ? "page" : undefined}
+              onClick={() => go(item.page)}
+            >
+              <item.icon size={17} />
+              {item.label}
+              {item.page === "approvals" && pending ? (
+                <small>{pending}</small>
+              ) : null}
+            </button>
+          ))}
+        </div>
+        <div className="nav-group">
+          <span>WORKSPACE</span>
+          {hubs.map((hub) => {
+            const items = hub.items.filter((item) =>
+              canOpenPage(workspace.actor, item.page),
+            );
+            if (!items.length) return null;
+            const active = items.some((item) => item.page === page);
+            return (
+              <button
+                key={hub.label}
+                className={active ? "active" : ""}
+                aria-current={active ? "page" : undefined}
+                onClick={() => go(items[0].page)}
+              >
+                <hub.icon size={17} />
+                {hub.label}
+              </button>
+            );
+          })}
+        </div>
       </nav>
       <div className="sidebar-bottom">
         <button
@@ -333,13 +307,19 @@ function Sidebar({
           </div>
         ) : null}
         <div className="sidebar-account">
-          <span className="account-avatar">
-            {initials(workspace.actor.name)}
-          </span>
-          <div>
-            <strong>{workspace.actor.name}</strong>
-            <small>{workspace.actor.role}</small>
-          </div>
+          <button
+            className="account-profile-button"
+            aria-label="My profile"
+            onClick={() => go("my-profile")}
+          >
+            <span className="account-avatar">
+              {initials(workspace.actor.name)}
+            </span>
+            <div>
+              <strong>{workspace.actor.name}</strong>
+              <small>{workspace.actor.role}</small>
+            </div>
+          </button>
           <Button
             size="icon-sm"
             variant="ghost"
@@ -426,12 +406,25 @@ export function WorkspaceApp({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
-  function go(p: Page) {
+  useEffect(() => {
+    const back = () => {
+      const view = new URLSearchParams(window.location.search).get("view");
+      setPage(view && view in labels ? (view as Page) : "overview");
+      setMobileOpen(false);
+      setForm(null);
+      setSearchOpen(false);
+    };
+    window.addEventListener("popstate", back);
+    return () => window.removeEventListener("popstate", back);
+  }, []);
+  function go(p: Page, replace = false) {
     if (!(p in labels)) return;
     setPage(p);
     setMobileOpen(false);
-    window.history.replaceState(
-      null,
+    if (p === page && !replace) return;
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    window.history[replace ? "replaceState" : "pushState"](
+      { ...window.history.state, nonymauzPrevious: replace ? undefined : page },
       "",
       p === "overview" ? "/" : `/?view=${p}`,
     );
@@ -499,11 +492,9 @@ export function WorkspaceApp({
         </Button>
       </div>
     );
-  const staff = isStaff(workspace.actor),
-    restricted =
-      (page === "recruitment" && !staff) ||
-      (page === "payments" && !hasPayroll(workspace.actor)),
-    visiblePage = restricted ? "overview" : page;
+  const restricted = !canOpenPage(workspace.actor, page),
+    visiblePage = restricted ? "overview" : page,
+    hub = hubFor(visiblePage);
   const results = search.trim()
     ? workspace.records
         .filter((r) =>
@@ -534,6 +525,23 @@ export function WorkspaceApp({
         <div className="main-shell">
           <header className="topbar">
             <div>
+              {visiblePage === "settings" ||
+              visiblePage === "hr-policies" ||
+              visiblePage === "my-profile" ? (
+                <Button
+                  className="mobile-settings-back"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Back to workspace"
+                  onClick={() => {
+                    if (window.history.state?.nonymauzPrevious)
+                      window.history.back();
+                    else go("overview", true);
+                  }}
+                >
+                  <ArrowLeft size={19} />
+                </Button>
+              ) : null}
               <Button
                 className="mobile-menu-button"
                 size="icon"
@@ -599,7 +607,7 @@ export function WorkspaceApp({
               [
                 { page: "overview", label: "Home", icon: LayoutDashboard },
                 { page: "attendance", label: "Time", icon: Clock3 },
-                { page: "leave", label: "Leave", icon: CalendarDays },
+                { page: "approvals", label: "Inbox", icon: ClipboardCheck },
                 { page: "assistant", label: "AI", icon: MessageSquare },
               ] as const
             ).map((item) => (
@@ -635,10 +643,51 @@ export function WorkspaceApp({
                 : "main-content"
             }
           >
+            {hub ? (
+              <nav className="hub-tabs" aria-label={`${hub.label} sections`}>
+                {hub.items
+                  .filter((item) => canOpenPage(workspace.actor, item.page))
+                  .map((item) => (
+                    <button
+                      key={item.page}
+                      aria-current={
+                        visiblePage === item.page ? "page" : undefined
+                      }
+                      className={visiblePage === item.page ? "active" : ""}
+                      onClick={() => go(item.page)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+              </nav>
+            ) : null}
+            {hub ? (
+              <div className="context-ai-action">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    ask(
+                      visiblePage === "payroll" || visiblePage === "payments"
+                        ? "payroll"
+                        : visiblePage === "claims"
+                          ? "claims"
+                          : visiblePage === "recruitment"
+                            ? "recruitment"
+                            : "hr",
+                      undefined,
+                      `Help me review ${labels[visiblePage].toLowerCase()} using the records available to me.`,
+                    )
+                  }
+                >
+                  <MessageSquare size={16} />
+                  Ask AI about this page
+                </Button>
+              </div>
+            ) : null}
             {[
               "employee-files",
               "work-requests",
-              "hr-policies",
               "reviews",
               "announcements",
               "payments",
@@ -646,6 +695,11 @@ export function WorkspaceApp({
               <OperationsPage
                 key={visiblePage}
                 view={visiblePage as import("./operations-page").OperationsView}
+              />
+            ) : visiblePage === "hr-policies" ? (
+              <SettingsPage
+                key={workspace.company.id + "-policies"}
+                initialSection="policies"
               />
             ) : visiblePage === "overview" ? (
               <OverviewPage />
