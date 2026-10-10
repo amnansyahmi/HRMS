@@ -113,6 +113,40 @@ try {
     );
   };
 
+  const ensureDashboardContrast = async () => {
+    const ratios = await page
+      .locator(".dashboard-metrics .metric")
+      .evaluateAll((cards) => {
+        const luminance = (color) => {
+          const channels = color
+            .match(/[\d.]+/g)
+            .slice(0, 3)
+            .map(Number)
+            .map((n) => {
+              const v = n / 255;
+              return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+            });
+          return (
+            channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+          );
+        };
+        return cards.map((card) => {
+          const style = getComputedStyle(card);
+          const foreground = luminance(style.color),
+            background = luminance(style.backgroundColor);
+          return (
+            (Math.max(foreground, background) + 0.05) /
+            (Math.min(foreground, background) + 0.05)
+          );
+        });
+      });
+    assert.equal(ratios.length, 4);
+    assert(
+      ratios.every((ratio) => ratio >= 4.5),
+      "Colored summary cards need readable text contrast",
+    );
+  };
+
   await page.addInitScript(() => {
     window.SpeechRecognition = class {
       start() {
@@ -160,6 +194,16 @@ try {
     .waitFor({ timeout: 30000 });
   const widget = (name) => page.locator(`[data-dashboard-widget="${name}"]`);
   await widget("agenda").waitFor();
+  await widget("activity").getByRole("img").waitFor();
+  await widget("request-mix").getByRole("img").waitFor();
+  await widget("activity")
+    .getByText("View daily counts", { exact: true })
+    .click();
+  assert.equal(await widget("activity").locator("tbody tr").count(), 7);
+  await widget("activity")
+    .getByText("View daily counts", { exact: true })
+    .click();
+  await ensureDashboardContrast();
   await page.getByRole("button", { name: "Widgets", exact: true }).click();
   await page.getByRole("checkbox", { name: /^This week/ }).uncheck();
   await page.getByRole("button", { name: "Done", exact: true }).click();
@@ -182,6 +226,23 @@ try {
     .click();
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await widget("agenda").waitFor();
+  await page.getByRole("button", { name: "Widgets", exact: true }).click();
+  for (const checkbox of await page
+    .getByRole("dialog")
+    .getByRole("checkbox")
+    .all())
+    await checkbox.uncheck();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  assert.equal(await page.locator("[data-dashboard-widget]").count(), 0);
+  await page
+    .getByText("Your widgets are hidden. Use Widgets to add them back.")
+    .waitFor();
+  await page.getByRole("button", { name: "Widgets", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Reset widgets", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await widget("activity").waitFor();
   await widget("agenda").locator(".agenda-days button").nth(1).click();
   assert.equal(
     await widget("agenda").locator('button[aria-pressed="true"]').count(),
@@ -981,6 +1042,7 @@ try {
   );
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await ensureThemeContrast();
+  await ensureDashboardContrast();
   await page.screenshot({
     path: "docs/screenshots/overview-dark-mobile.png",
     fullPage: true,
@@ -1474,6 +1536,7 @@ try {
       {
         desktop: true,
         dashboardWidgets: true,
+        dashboardCharts: true,
         widgetPreferencePersistence: true,
         accountScopedPreferences: true,
         phoneHubNavigation: true,

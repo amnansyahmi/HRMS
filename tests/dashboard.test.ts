@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { defaultSettings } from "@/lib/auth";
 import {
   dashboardSnapshot,
+  dashboardAnalytics,
   goalPercent,
   parseHiddenWidgets,
   pendingDashboardRequests,
@@ -189,5 +190,90 @@ describe("authorized dashboard", () => {
     ]);
     expect(parseHiddenWidgets('{"agenda":true}')).toEqual([]);
     expect(parseHiddenWidgets("bad JSON")).toEqual([]);
+  });
+});
+
+describe("dashboard charts", () => {
+  it("counts person-days, drops malformed and out-of-period clocks and stays company-scoped", () => {
+    const clock = (id: string, date: string, employee = "me") =>
+      record(
+        id,
+        "attendance",
+        { workDate: date, clockIn: `${date}T01:00:00Z` },
+        employee,
+      );
+    const snapshot = dashboardSnapshot(
+      {
+        ...workspace,
+        records: [
+          clock("first", "2026-10-10"),
+          clock("repeat", "2026-10-10"),
+          clock("teammate", "2026-10-10", "team"),
+          clock("yesterday", "2026-10-09"),
+          clock("old", "2026-10-03"),
+          clock("future", "2026-10-11"),
+          { ...clock("foreign", "2026-10-10", "foreign"), company_id: "other" },
+          {
+            ...clock("invalid", "2026-10-10", "invalid"),
+            data: { workDate: "2026-10-10", clockIn: "invalid" },
+          },
+          { ...clock("unlinked", "2026-10-10"), employee_id: null },
+        ],
+      },
+      new Date("2026-10-10T02:00:00Z"),
+    );
+    expect(dashboardAnalytics(snapshot).attendance).toEqual([
+      { date: "2026-10-04", count: 0 },
+      { date: "2026-10-05", count: 0 },
+      { date: "2026-10-06", count: 0 },
+      { date: "2026-10-07", count: 0 },
+      { date: "2026-10-08", count: 0 },
+      { date: "2026-10-09", count: 1 },
+      { date: "2026-10-10", count: 2 },
+    ]);
+  });
+  it("groups every request type and excludes requests outside own or actionable scope", () => {
+    const kinds = [
+      "leave",
+      "claim",
+      "overtime",
+      "time_off",
+      "attendance_correction",
+      "lateness",
+      "goal_update",
+      "profile_change",
+    ] as const;
+    const snapshot = dashboardSnapshot(
+      {
+        ...workspace,
+        records: [
+          ...kinds.map((kind) =>
+            record(kind, kind, { status: "Pending", submittedBy: "user" }),
+          ),
+          record("approved", "leave", { status: "Approved" }),
+          record("other-person", "claim", { status: "Pending" }, "other"),
+        ],
+      },
+      new Date("2026-10-10T02:00:00Z"),
+    );
+    const analytics = dashboardAnalytics(snapshot);
+    expect(analytics.totalRequests).toBe(8);
+    expect(analytics.requests.map((category) => category.count)).toEqual([
+      1, 1, 4, 1, 1,
+    ]);
+    expect(
+      analytics.requests.reduce((sum, category) => sum + category.count, 0),
+    ).toBe(analytics.totalRequests);
+  });
+  it("returns a zero-filled seven-day series and zero request categories for an empty workspace", () => {
+    const result = dashboardAnalytics(
+      dashboardSnapshot(workspace, new Date("2026-10-10T02:00:00Z")),
+    );
+    expect(result.attendance).toHaveLength(7);
+    expect(result.attendance.every((day) => day.count === 0)).toBe(true);
+    expect(result.requests.every((category) => category.count === 0)).toBe(
+      true,
+    );
+    expect(result.totalRequests).toBe(0);
   });
 });
