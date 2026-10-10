@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 import {
   LayoutDashboard,
   ClipboardCheck,
-  MessageSquare,
+  Sparkles,
   Settings,
   Search,
   PanelLeftClose,
@@ -215,7 +215,7 @@ function Sidebar({
         className="sidebar-ai"
         onClick={() => go("assistant")}
       >
-        <MessageSquare size={16} />
+        <Sparkles size={16} />
         Ask People AI
         <ArrowUpRight size={14} />
       </Button>
@@ -623,45 +623,57 @@ export function WorkspaceApp({
             }
           >
             {hub ? (
-              <nav className="hub-tabs" aria-label={`${hub.label} sections`}>
-                {hub.items
-                  .filter((item) => canOpenPage(workspace.actor, item.page))
-                  .map((item) => (
-                    <button
-                      key={item.page}
-                      aria-current={
-                        visiblePage === item.page ? "page" : undefined
-                      }
-                      className={visiblePage === item.page ? "active" : ""}
-                      onClick={() => go(item.page)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-              </nav>
-            ) : null}
-            {hub ? (
-              <div className="context-ai-action">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    ask(
-                      visiblePage === "payroll" || visiblePage === "payments"
-                        ? "payroll"
-                        : visiblePage === "claims"
-                          ? "claims"
-                          : visiblePage === "recruitment"
-                            ? "recruitment"
-                            : "hr",
-                      undefined,
-                      `Help me review ${labels[visiblePage].toLowerCase()} using the records available to me.`,
-                    )
-                  }
-                >
-                  <MessageSquare size={16} />
-                  Ask AI about this page
-                </Button>
+              <div className="workspace-section-bar">
+                <nav className="hub-tabs" aria-label={`${hub.label} sections`}>
+                  {hub.items
+                    .filter((item) => canOpenPage(workspace.actor, item.page))
+                    .map((item) => (
+                      <button
+                        key={item.page}
+                        aria-label={item.label}
+                        aria-current={
+                          visiblePage === item.page ? "page" : undefined
+                        }
+                        className={visiblePage === item.page ? "active" : ""}
+                        onClick={() => go(item.page)}
+                      >
+                        <span className="hub-label-full">{item.label}</span>
+                        <span className="hub-label-short">
+                          {item.page === "attendance"
+                            ? "Clock"
+                            : item.page === "work-requests"
+                              ? "Requests"
+                              : item.page === "calendar"
+                                ? "Calendar"
+                                : item.label}
+                        </span>
+                      </button>
+                    ))}
+                </nav>
+                <div className="context-ai-action">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Ask AI about this page"
+                    title="Ask AI about this page"
+                    onClick={() =>
+                      ask(
+                        visiblePage === "payroll" || visiblePage === "payments"
+                          ? "payroll"
+                          : visiblePage === "claims"
+                            ? "claims"
+                            : visiblePage === "recruitment"
+                              ? "recruitment"
+                              : "hr",
+                        undefined,
+                        `Help me review ${labels[visiblePage].toLowerCase()} using the records available to me.`,
+                      )
+                    }
+                  >
+                    <Sparkles size={16} />
+                    <span>Ask AI about this page</span>
+                  </Button>
+                </div>
               </div>
             ) : null}
             {[

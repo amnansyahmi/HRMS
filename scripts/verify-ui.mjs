@@ -113,33 +113,33 @@ try {
     );
   };
 
-  const ensureDashboardContrast = async () => {
-    const ratios = await page
-      .locator(".dashboard-metrics .metric")
-      .evaluateAll((cards) => {
-        const luminance = (color) => {
-          const channels = color
-            .match(/[\d.]+/g)
-            .slice(0, 3)
-            .map(Number)
-            .map((n) => {
-              const v = n / 255;
-              return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-            });
-          return (
-            channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
-          );
-        };
-        return cards.map((card) => {
-          const style = getComputedStyle(card);
-          const foreground = luminance(style.color),
-            background = luminance(style.backgroundColor);
-          return (
-            (Math.max(foreground, background) + 0.05) /
-            (Math.min(foreground, background) + 0.05)
-          );
-        });
+  const ensureDashboardContrast = async (
+    selector = ".dashboard-metrics .metric",
+  ) => {
+    const ratios = await page.locator(selector).evaluateAll((cards) => {
+      const luminance = (color) => {
+        const channels = color
+          .match(/[\d.]+/g)
+          .slice(0, 3)
+          .map(Number)
+          .map((n) => {
+            const v = n / 255;
+            return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+          });
+        return (
+          channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+        );
+      };
+      return cards.map((card) => {
+        const style = getComputedStyle(card);
+        const foreground = luminance(style.color),
+          background = luminance(style.backgroundColor);
+        return (
+          (Math.max(foreground, background) + 0.05) /
+          (Math.min(foreground, background) + 0.05)
+        );
       });
+    });
     assert.equal(ratios.length, 4);
     assert(
       ratios.every((ratio) => ratio >= 4.5),
@@ -1009,6 +1009,131 @@ try {
   await page
     .getByRole("heading", { name: "Attendance & shifts", exact: true })
     .waitFor();
+  const assertPhoneFits = async (label) => {
+    assert(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      `${label} overflows the phone`,
+    );
+    for (const selector of [
+      ".clock-actions select",
+      ".clock-action-buttons button",
+      ".workspace-section-bar",
+      ".claim-summary-card",
+    ]) {
+      for (const element of await page.locator(selector).all()) {
+        const bounds = await element.boundingBox();
+        if (bounds)
+          assert(
+            bounds.x >= 0 &&
+              bounds.x + bounds.width <= page.viewportSize().width,
+            `${selector} escapes the phone`,
+          );
+      }
+    }
+  };
+  await assertPhoneFits("Attendance");
+  assert(
+    (await phoneNav
+      .getByRole("button", { name: "Ask AI", exact: true })
+      .locator("svg.lucide-sparkles")
+      .count()) === 1,
+    "Ask AI must use an SVG symbol",
+  );
+  await page.screenshot({
+    path: "docs/screenshots/attendance-mobile.png",
+    fullPage: true,
+  });
+  await page.getByRole("tab", { name: "Roster", exact: true }).click();
+  await page.getByRole("region", { name: "Daily roster" }).waitFor();
+  const firstRosterDay = await page.locator(".roster-day-nav h2").textContent();
+  await page.getByRole("button", { name: "Next roster day" }).click();
+  assert.notEqual(
+    await page.locator(".roster-day-nav h2").textContent(),
+    firstRosterDay,
+  );
+  await page.getByRole("button", { name: "Previous roster day" }).click();
+  assert.equal(
+    await page.locator(".roster-day-nav h2").textContent(),
+    firstRosterDay,
+  );
+  await page.getByLabel("Roster starts").fill("");
+  assert.equal(
+    await page.locator(".roster-day-nav h2").textContent(),
+    firstRosterDay,
+    "Clearing roster start must not crash the date view",
+  );
+  await page.setViewportSize({ width: 320, height: 640 });
+  await assertPhoneFits("Small-phone roster");
+  await page.getByRole("tab", { name: "Attendance", exact: true }).click();
+  await assertPhoneFits("Small-phone clock controls");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("tab", { name: "Roster", exact: true }).click();
+  await page.screenshot({
+    path: "docs/screenshots/roster-mobile.png",
+    fullPage: true,
+  });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await ensureThemeContrast();
+  await page.screenshot({
+    path: "docs/screenshots/roster-dark-mobile.png",
+    fullPage: true,
+  });
+  await page.emulateMedia({
+    colorScheme: "light",
+    reducedMotion: "no-preference",
+  });
+  await ensureThemeContrast();
+  await page.goto(`${base}/?view=assessments`);
+  await page
+    .getByRole("heading", { name: "Skills & work preferences" })
+    .waitFor();
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.getByRole("tab", { name: "Team profiles", exact: true }).click();
+  await assertPhoneFits("Skills tabs");
+  assert.equal(
+    await page
+      .getByRole("tab", { name: "Team profiles", exact: true })
+      .getAttribute("aria-selected"),
+    "true",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("tab", { name: "Assessments", exact: true }).click();
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.screenshot({
+    path: "docs/screenshots/assessments-mobile.png",
+    fullPage: true,
+  });
+  await page.goto(`${base}/?view=claims`);
+  await page.getByRole("heading", { name: "Expense claims" }).waitFor();
+  await page.getByRole("button", { name: /^Pending review/ }).click();
+  assert.equal(await page.getByLabel("Request status").inputValue(), "Pending");
+  await page.getByRole("button", { name: /^Pending review/ }).click();
+  assert.equal(await page.getByLabel("Request status").inputValue(), "All");
+  await assertPhoneFits("Claim totals");
+  await ensureDashboardContrast(".claim-summary-card");
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.screenshot({
+    path: "docs/screenshots/claims-summary-mobile.png",
+    fullPage: true,
+  });
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await ensureThemeContrast();
+  await ensureDashboardContrast(".claim-summary-card");
+  await page.screenshot({
+    path: "docs/screenshots/claims-summary-dark-mobile.png",
+    fullPage: true,
+  });
+  await page.emulateMedia({
+    colorScheme: "light",
+    reducedMotion: "no-preference",
+  });
+  await ensureThemeContrast();
+  await page.goto(`${base}/?view=attendance`);
+  await page
+    .getByRole("heading", { name: "Attendance & shifts", exact: true })
+    .waitFor();
   await page
     .locator(".hub-tabs")
     .getByRole("button", { name: "Leave", exact: true })
@@ -1226,6 +1351,16 @@ try {
   const employeeView = await (
     await page.request.get(`${base}/api/workspace`)
   ).json();
+  await page.goto(`${base}/?view=attendance`);
+  await page.getByRole("heading", { name: "Attendance & shifts" }).waitFor();
+  await page.getByRole("tab", { name: "Roster", exact: true }).click();
+  assert.equal(
+    await page.locator(".roster-person-card").count(),
+    1,
+    "An employee's roster must contain only their own schedule",
+  );
+  await page.goto(`${base}/?view=payroll`);
+  await page.getByRole("heading", { name: "Payroll & payslips" }).waitFor();
   assert(!employeeView.records.some((r) => r.kind === "candidate"));
   assert(
     employeeView.records
@@ -1537,6 +1672,10 @@ try {
         desktop: true,
         dashboardWidgets: true,
         dashboardCharts: true,
+        mobileAttendance: true,
+        dailyPhoneRoster: true,
+        sharedContentTabs: true,
+        claimSummaryFilters: true,
         widgetPreferencePersistence: true,
         accountScopedPreferences: true,
         phoneHubNavigation: true,

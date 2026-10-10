@@ -18,6 +18,7 @@ import {
   LogOut,
   CalendarDays,
   Camera,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -122,10 +123,10 @@ export function AttendancePage() {
     }
   }
   return (
-    <>
+    <div className="attendance-page">
       <PageHeader
         title="Attendance & shifts"
-        description={`Keep working time clear. Times shown in ${workspace.company.settings.timezone}.`}
+        description={`Clock in, review your time and plan shifts. Times in ${workspace.company.settings.timezone.replaceAll("_", " ")}.`}
         action={
           staff && tab === "shifts" ? (
             <AddButton onClick={() => edit("shift")}>Add shift</AddButton>
@@ -138,61 +139,66 @@ export function AttendancePage() {
             <Clock3 size={24} />
           </div>
           <div>
-            <strong>
-              {open ? "You’re clocked in" : "Ready to start your day?"}
-            </strong>
+            <strong>{open ? "You’re clocked in" : "Ready to clock in?"}</strong>
             <p>
               {open
                 ? `Started at ${time(open.data.clockIn)} · ${open.data.location}`
-                : "Your clock-in time is recorded when you press the button."}
+                : "Choose where you’re working, then start your day."}
             </p>
           </div>
           <div className="clock-actions">
-            {!open && workspace.records.some((r) => r.kind === "location") ? (
-              <NativeSelect
-                label="Named workplace"
-                value={locationId}
-                onChange={setLocationId}
-                options={[
-                  { value: "", label: "Choose workplace" },
-                  ...workspace.records
-                    .filter((r) => r.kind === "location")
-                    .map((r) => ({ value: r.id, label: String(r.data.name) })),
-                ]}
-              />
-            ) : null}
-            {!open ? (
-              <NativeSelect
-                label="Work location"
-                value={location}
-                onChange={setLocation}
-                options={["Office", "Remote", "Client site"].map((v) => ({
-                  value: v,
-                  label: v,
-                }))}
-              />
-            ) : null}
-            <Button
-              disabled={busy}
-              onClick={() =>
-                workspace.company.settings.attendanceEvidence?.photoRequired
-                  ? setCamera(true)
-                  : void clock()
-              }
-            >
-              {open ? <LogOut size={16} /> : <LogIn size={16} />}Clock{" "}
-              {open ? "out" : "in"}
-            </Button>
-            {!workspace.company.settings.attendanceEvidence?.photoRequired ? (
+            <div className="clock-location-fields">
+              {!open && workspace.records.some((r) => r.kind === "location") ? (
+                <NativeSelect
+                  label="Named workplace"
+                  value={locationId}
+                  onChange={setLocationId}
+                  options={[
+                    { value: "", label: "Choose workplace" },
+                    ...workspace.records
+                      .filter((r) => r.kind === "location")
+                      .map((r) => ({
+                        value: r.id,
+                        label: String(r.data.name),
+                      })),
+                  ]}
+                />
+              ) : null}
+              {!open ? (
+                <NativeSelect
+                  label="Work location"
+                  value={location}
+                  onChange={setLocation}
+                  options={["Office", "Remote", "Client site"].map((v) => ({
+                    value: v,
+                    label: v,
+                  }))}
+                />
+              ) : null}
+            </div>
+            <div className="clock-action-buttons">
               <Button
-                variant="outline"
                 disabled={busy}
-                onClick={() => setCamera(true)}
+                onClick={() =>
+                  workspace.company.settings.attendanceEvidence?.photoRequired
+                    ? setCamera(true)
+                    : void clock()
+                }
               >
-                <Camera size={16} />
-                With photo
+                {open ? <LogOut size={16} /> : <LogIn size={16} />}Clock{" "}
+                {open ? "out" : "in"}
               </Button>
-            ) : null}
+              {!workspace.company.settings.attendanceEvidence?.photoRequired ? (
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => setCamera(true)}
+                >
+                  <Camera size={16} />
+                  With photo
+                </Button>
+              ) : null}
+            </div>
           </div>
         </section>
       ) : (
@@ -208,7 +214,7 @@ export function AttendancePage() {
           onConfirm={clock}
         />
       ) : null}
-      <Tabs value={tab} onValueChange={setTab}>
+      <Tabs className="attendance-tabs" value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="attendance">Attendance</TabsTrigger>
           <TabsTrigger value="shifts">Shifts</TabsTrigger>
@@ -233,7 +239,7 @@ export function AttendancePage() {
             />
           </div>
           {rows.length ? (
-            <div className="table-wrap">
+            <div className="table-wrap attendance-table">
               <table>
                 <thead>
                   <tr>
@@ -251,9 +257,9 @@ export function AttendancePage() {
                       <td>
                         <Person name={employeeName(r.employee_id)} />
                       </td>
-                      <td>{time(r.data.clockIn)}</td>
-                      <td>{time(r.data.clockOut)}</td>
-                      <td>
+                      <td data-label="Clock in">{time(r.data.clockIn)}</td>
+                      <td data-label="Clock out">{time(r.data.clockOut)}</td>
+                      <td data-label="Hours">
                         {r.data.clockOut
                           ? (
                               (Date.parse(String(r.data.clockOut)) -
@@ -262,7 +268,7 @@ export function AttendancePage() {
                             ).toFixed(1)
                           : "In progress"}
                       </td>
-                      <td>
+                      <td data-label="Location">
                         {String(r.data.location)}
                         <div className="attendance-evidence-links">
                           {(
@@ -355,7 +361,7 @@ export function AttendancePage() {
           ) : null}
         </TabsContent>
       </Tabs>
-    </>
+    </div>
   );
 }
 export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
@@ -556,38 +562,56 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
         </div>
       ) : null}
       {kind === "claim" ? (
-        <div className="summary-strip">
-          <div>
-            <small>Pending review</small>
-            <strong>
-              {money(
-                all
-                  .filter((r) => r.data.status === "Pending")
-                  .reduce((n, r) => n + Number(r.data.amount), 0),
-              )}
-            </strong>
-          </div>
-          <div>
-            <small>Approved, awaiting payment</small>
-            <strong>
-              {money(
-                all
-                  .filter((r) => r.data.status === "Approved")
-                  .reduce((n, r) => n + Number(r.data.amount), 0),
-              )}
-            </strong>
-          </div>
-          <div>
-            <small>Paid</small>
-            <strong>
-              {money(
-                all
-                  .filter((r) => r.data.status === "Paid")
-                  .reduce((n, r) => n + Number(r.data.amount), 0),
-              )}
-            </strong>
-          </div>
-        </div>
+        <section className="claim-summary" aria-label="Claim totals by status">
+          {[
+            {
+              status: "Pending",
+              label: "Pending review",
+              tone: "amber",
+              icon: Clock3,
+            },
+            {
+              status: "Approved",
+              label: "Awaiting payment",
+              tone: "blue",
+              icon: Check,
+            },
+            { status: "Paid", label: "Paid", tone: "teal", icon: Receipt },
+            {
+              status: "Returned",
+              label: "Needs changes",
+              tone: "rose",
+              icon: RotateCcw,
+            },
+          ].map((item) => (
+            <button
+              key={item.status}
+              className={`claim-summary-card claim-tone-${item.tone}`}
+              aria-pressed={status === item.status}
+              onClick={() =>
+                setStatus(status === item.status ? "All" : item.status)
+              }
+            >
+              <span>
+                <item.icon size={17} aria-hidden="true" />
+                {item.label}
+              </span>
+              <strong>
+                {money(
+                  all
+                    .filter((r) => r.data.status === item.status)
+                    .reduce((sum, r) => sum + Number(r.data.amount), 0),
+                )}
+              </strong>
+              <small>
+                {all.filter((r) => r.data.status === item.status).length}{" "}
+                {all.filter((r) => r.data.status === item.status).length === 1
+                  ? "claim"
+                  : "claims"}
+              </small>
+            </button>
+          ))}
+        </section>
       ) : null}
       <div className="table-toolbar">
         <SearchField
