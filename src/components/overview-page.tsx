@@ -6,47 +6,33 @@ import {
   CalendarDays,
   BriefcaseBusiness,
   ArrowRight,
-  MessageSquare,
   Receipt,
-  ArrowUpRight,
   ClipboardCheck,
   UserRound,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspace } from "./workspace-context";
 import { PageHeader, Person, Status, Empty, InlineLink } from "./common";
-import { shortDate } from "@/lib/client";
-import { localDate } from "@/lib/calculations";
+import { dashboardSnapshot, goalPercent } from "@/lib/dashboard";
+import {
+  DashboardPreferences,
+  useDashboardWidgets,
+} from "./dashboard-preferences";
+import { WorkdayWidget, AgendaWidget } from "./dashboard-widgets";
 import { isStaff, type HRRecord } from "@/lib/types";
 import { useState } from "react";
-import { requestKinds, reviewOptions } from "@/lib/request-workflow";
+import { reviewOptions } from "@/lib/request-workflow";
 import { RequestSummary, RequestReviewDialog } from "./request-review";
 export function OverviewPage() {
-  const { workspace, go, edit, ask } = useWorkspace(),
-    { records, actor, company } = workspace;
+  const { workspace, go, edit } = useWorkspace(),
+    { actor, company } = workspace;
   const [review, setReview] = useState<HRRecord | null>(null);
-  const employees = records.filter(
-      (r) => r.kind === "employee" && r.data.status !== "Archived",
-    ),
-    today = localDate(new Date(), company.settings.timezone),
-    attendance = records.filter(
-      (r) => r.kind === "attendance" && r.data.workDate === today,
-    ),
-    pending = records.filter(
-      (r) =>
-        [...requestKinds, "profile_change"].includes(r.kind) &&
-        r.data.status === "Pending" &&
-        (r.employee_id === actor.employeeId ||
-          reviewOptions(actor, r, records).some((o) =>
-            ["Approved", "Rejected", "Returned"].includes(o),
-          )),
-    ),
-    jobs = records.filter(
-      (r) => r.kind === "job" && r.data.status === "Published",
-    ),
-    goals = records.filter(
-      (r) => r.kind === "goal" && r.data.status !== "Completed",
-    );
+  const snapshot = dashboardSnapshot(workspace);
+  const { employees, today, attendance, pending, jobs, goals } = snapshot;
+  const { hidden, update } = useDashboardWidgets(company.id, actor.userId);
+  const show = (id: import("@/lib/dashboard").DashboardWidget) =>
+    !hidden.includes(id);
   const employeeName = (id: string | null) =>
       String(employees.find((e) => e.id === id)?.data.name || "Employee"),
     staff = isStaff(actor),
@@ -55,21 +41,23 @@ export function OverviewPage() {
     {
       label: "People",
       value: employees.length,
-      detail: "Active team members",
+      detail: "People in your directory",
       icon: Users,
       page: "people" as const,
     },
     {
       label: "Clocked in",
-      value: attendance.filter((r) => !r.data.clockOut).length,
-      detail: "Today, across your workspace",
+      value: snapshot.clockedIn,
+      detail: "Active sessions available to you",
       icon: Clock3,
       page: "attendance" as const,
     },
     {
       label: "Pending requests",
       value: pending.length,
-      detail: "Requests awaiting a decision",
+      detail: canReview
+        ? "Your available pending requests"
+        : "Track your pending requests",
       icon: CalendarDays,
       page: "approvals" as const,
     },
@@ -83,7 +71,15 @@ export function OverviewPage() {
             page: "recruitment" as const,
           },
         ]
-      : []),
+      : [
+          {
+            label: "Away today",
+            value: snapshot.away,
+            detail: "Approved time away",
+            icon: CalendarDays,
+            page: "calendar" as const,
+          },
+        ]),
   ];
   return (
     <>
@@ -97,15 +93,25 @@ export function OverviewPage() {
         title={`Your workday, ${actor.name.split(" ")[0]}.`}
         description="Team activity and the work that needs your attention."
         action={
-          staff ? (
-            <Button variant="outline" onClick={() => edit("employee")}>
-              <Users size={15} />
-              Add employee
-            </Button>
-          ) : null
+          <div className="dashboard-heading-actions">
+            <DashboardPreferences
+              hidden={hidden}
+              update={update}
+              hasEmployee={!!snapshot.own}
+            />
+            {staff ? (
+              <Button onClick={() => edit("employee")}>
+                <Plus size={15} />
+                Add employee
+              </Button>
+            ) : null}
+          </div>
         }
       />
-      <section className={`metrics-grid ${!staff ? "metrics-three" : ""}`}>
+      <section
+        className="metrics-grid dashboard-metrics"
+        aria-label="Dashboard summary"
+      >
         {metrics.map((m) => (
           <button className="metric" key={m.label} onClick={() => go(m.page)}>
             <div>
@@ -116,24 +122,6 @@ export function OverviewPage() {
             <small>{m.detail}</small>
           </button>
         ))}
-      </section>
-      <section className="assistant-callout">
-        <div className="assistant-callout-icon">
-          <MessageSquare size={22} />
-        </div>
-        <div>
-          <h2>People AI</h2>
-          <p>Find an answer. Plan your next step.</p>
-        </div>
-        <Button
-          variant="outline"
-          onClick={() =>
-            ask("hr", undefined, "What should I follow up on today?")
-          }
-        >
-          Ask People AI
-          <ArrowUpRight size={15} />
-        </Button>
       </section>
       <div className="overview-shortcuts" aria-label="Quick access">
         {[
@@ -166,142 +154,196 @@ export function OverviewPage() {
           </button>
         ))}
       </div>
-      <HRDigest />
-      <div className="overview-columns">
-        <section className="panel">
-          <div className="panel-heading">
-            <div>
-              <h2>{canReview ? "Needs your attention" : "Your requests"}</h2>
-              <p>
-                {pending.length} pending{" "}
-                {pending.length === 1 ? "request" : "requests"}
-              </p>
+      <div className="dashboard-grid">
+        {show("workday") ? <WorkdayWidget snapshot={snapshot} /> : null}
+        {show("agenda") ? <AgendaWidget snapshot={snapshot} /> : null}
+        {show("requests") ? (
+          <section
+            className="panel dashboard-widget"
+            data-dashboard-widget="requests"
+          >
+            <div className="panel-heading">
+              <div>
+                <h2>{canReview ? "Needs your attention" : "Your requests"}</h2>
+                <p>
+                  {pending.length} pending{" "}
+                  {pending.length === 1 ? "request" : "requests"}
+                </p>
+              </div>
+              <InlineLink onClick={() => go("approvals")}>View all</InlineLink>
             </div>
-            <InlineLink onClick={() => go("approvals")}>View all</InlineLink>
-          </div>
-          {pending.length ? (
-            <div className="request-list">
-              {pending.slice(0, 5).map((r) => (
-                <div className="request-row" key={r.id}>
-                  <span className="request-icon">
-                    {r.kind === "leave" ? (
-                      <CalendarDays size={17} />
+            {pending.length ? (
+              <div className="request-list">
+                {pending.slice(0, 5).map((r) => (
+                  <div className="request-row" key={r.id}>
+                    <span className="request-icon">
+                      {r.kind === "leave" ? (
+                        <CalendarDays size={17} />
+                      ) : (
+                        <Receipt size={17} />
+                      )}
+                    </span>
+                    <div>
+                      <strong>{employeeName(r.employee_id)}</strong>
+                      <small>
+                        <RequestSummary record={r} />
+                      </small>
+                    </div>
+                    {reviewOptions(actor, r, snapshot.records).some((o) =>
+                      ["Approved", "Rejected", "Returned"].includes(o),
+                    ) ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setReview(r)}
+                      >
+                        Review
+                      </Button>
                     ) : (
-                      <Receipt size={17} />
+                      <Status value={r.data.status} />
                     )}
-                  </span>
-                  <div>
-                    <strong>{employeeName(r.employee_id)}</strong>
-                    <small>
-                      <RequestSummary record={r} />
-                    </small>
                   </div>
-                  {reviewOptions(actor, r, records).some((o) =>
-                    ["Approved", "Rejected", "Returned"].includes(o),
-                  ) ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setReview(r)}
+                ))}
+              </div>
+            ) : (
+              <Empty
+                title="You’re all caught up"
+                description="Pending requests will appear here."
+              />
+            )}
+          </section>
+        ) : null}
+        {show("attendance") ? (
+          <section
+            className="panel dashboard-widget"
+            data-dashboard-widget="attendance"
+          >
+            <div className="panel-heading">
+              <div>
+                <h2>Working today</h2>
+                <p>
+                  {new Intl.DateTimeFormat("en-MY", {
+                    timeZone: "UTC",
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  }).format(new Date(today + "T12:00:00Z"))}{" "}
+                  · {company.settings.timezone.replace("Asia/", "")}
+                </p>
+              </div>
+              <InlineLink onClick={() => go("attendance")}>
+                Attendance
+              </InlineLink>
+            </div>
+            {attendance.length ? (
+              <div className="today-list">
+                {attendance.slice(0, 5).map((r) => (
+                  <div className="row-between" key={r.id}>
+                    <Person
+                      name={employeeName(r.employee_id)}
+                      detail={String(r.data.location || "Workplace")}
+                    />
+                    <Status
+                      value={
+                        r.data.clockOut
+                          ? "Clocked out"
+                          : Number(r.data.lateMinutes) > 0
+                            ? "Late"
+                            : "On time"
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Empty
+                title="No clock-ins yet"
+                description="Today’s attendance will appear here."
+              />
+            )}
+          </section>
+        ) : null}
+        {show("digest") ? (
+          <div className="dashboard-digest" data-dashboard-widget="digest">
+            <HRDigest />
+          </div>
+        ) : null}
+        {show("goals") ? (
+          <section
+            className="panel goals-overview dashboard-widget"
+            data-dashboard-widget="goals"
+          >
+            <div className="panel-heading">
+              <div>
+                <h2>Goals in progress</h2>
+                <p>
+                  {goals.length} active {goals.length === 1 ? "goal" : "goals"}
+                </p>
+              </div>
+              <InlineLink onClick={() => go("performance")}>
+                All goals
+              </InlineLink>
+            </div>
+            {goals.length ? (
+              <div className="goal-preview-grid">
+                {goals.slice(0, 3).map((g) => (
+                  <button
+                    className="goal-preview"
+                    key={g.id}
+                    onClick={() => go("performance")}
+                  >
+                    <small>
+                      {g.data.scope === "Company"
+                        ? "Company goal"
+                        : g.data.scope === "Team"
+                          ? "Team goal"
+                          : employeeName(g.employee_id)}
+                    </small>
+                    <h3>{String(g.data.title)}</h3>
+                    <div
+                      className="mini-progress"
+                      role="progressbar"
+                      aria-label={String(g.data.title)}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={goalPercent(
+                        g.data.progress,
+                        g.data.target,
+                      )}
                     >
-                      Review
-                    </Button>
-                  ) : (
-                    <Status value={r.data.status} />
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <Empty
-              title="You’re all caught up"
-              description="Pending requests will appear here."
-            />
-          )}
-        </section>
-        <section className="panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Working today</h2>
-              <p>
-                {shortDate(today)} ·{" "}
-                {company.settings.timezone.replace("Asia/", "")}
-              </p>
-            </div>
-            <InlineLink onClick={() => go("attendance")}>Attendance</InlineLink>
-          </div>
-          {attendance.length ? (
-            <div className="today-list">
-              {attendance.slice(0, 5).map((r) => (
-                <div className="row-between" key={r.id}>
-                  <Person
-                    name={employeeName(r.employee_id)}
-                    detail={String(r.data.location)}
-                  />
-                  <Status
-                    value={
-                      r.data.clockOut
-                        ? "Clocked out"
-                        : Number(r.data.lateMinutes) > 0
-                          ? "Late"
-                          : "On time"
-                    }
-                  />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <Empty
-              title="No clock-ins yet"
-              description="Today’s attendance will appear here."
-            />
-          )}
-        </section>
+                      <span
+                        style={{
+                          width: `${goalPercent(g.data.progress, g.data.target)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="row-between">
+                      <span>
+                        {g.data.progress as number} / {g.data.target as number}{" "}
+                        {String(g.data.unit)}
+                      </span>
+                      <ArrowRight size={15} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <Empty
+                title="Make room for growth"
+                description="Add team goals and keep progress in view."
+              />
+            )}
+          </section>
+        ) : null}
       </div>
-      <section className="panel goals-overview">
-        <div className="panel-heading">
-          <div>
-            <h2>Goals in progress</h2>
-            <p>
-              {goals.length} active {goals.length === 1 ? "goal" : "goals"}
-            </p>
-          </div>
-          <InlineLink onClick={() => go("performance")}>All goals</InlineLink>
-        </div>
-        {goals.length ? (
-          <div className="goal-preview-grid">
-            {goals.slice(0, 3).map((g) => (
-              <button
-                className="goal-preview"
-                key={g.id}
-                onClick={() => go("performance")}
-              >
-                <small>{employeeName(g.employee_id)}</small>
-                <h3>{String(g.data.title)}</h3>
-                <div className="mini-progress">
-                  <span
-                    style={{
-                      width: `${Math.min(100, (Number(g.data.progress) / Number(g.data.target)) * 100)}%`,
-                    }}
-                  />
-                </div>
-                <div className="row-between">
-                  <span>
-                    {g.data.progress as number} / {g.data.target as number}{" "}
-                    {String(g.data.unit)}
-                  </span>
-                  <ArrowRight size={15} />
-                </div>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <Empty
-            title="Make room for growth"
-            description="Add team goals and keep progress in view."
-          />
-        )}
-      </section>
+      {["agenda", "requests", "attendance", "digest", "goals"].every((id) =>
+        hidden.includes(id as import("@/lib/dashboard").DashboardWidget),
+      ) &&
+      (!snapshot.own || hidden.includes("workday")) ? (
+        <p className="dashboard-empty">
+          Your widgets are hidden. Use Widgets to add them back.
+        </p>
+      ) : null}
       {review ? (
         <RequestReviewDialog
           key={review.id}

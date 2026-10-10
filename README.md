@@ -142,6 +142,10 @@ Workspace owners can use **AI connection → Check connection** to query the con
 
 ## Workspace navigation and daily work
 
+Home is a widget dashboard: personal clock status and leave balance, a tappable seven-day agenda, pending requests, each person's latest attendance, HR follow-ups and bounded goal progress. Widgets can be hidden or reset; preferences contain only widget IDs and are scoped to the account and company in this browser. Dashboard records remain server-authorized, calendar entries omit private leave reasons, and open overnight sessions are included in the unique clocked-in count. Clock actions lead to Attendance to retain workplace, photo and GPS validation.
+
+The phone dock has Home, Time, Ask AI, Inbox and Menu. Time stays selected across leave, calendar and time requests; the inbox badge counts pending requests available to the account. Menu opens a scrollable sheet of the existing workspace hubs and account controls. [Design tokens](docs/DESIGN-SYSTEM.md) define the teal action color, warm surfaces, light/dark variants and semantic statuses.
+
 The sidebar groups pages under People, Time & leave, Pay & claims, Performance, Hiring and Knowledge. Home, Approval inbox and People AI stay directly accessible. HR policies live in Settings; profile access is available from the account button. Existing view URLs continue to work. Mobile Settings includes a back arrow, and browser Back follows page history without saving unsaved fields.
 
 Leave shows balances, a compact personal month calendar and request history. Both calendars have tappable days, approved/pending event dots and a selected-day summary on phones. The form uses a single leave-type selector for standard and eligible custom policies; hourly fields appear only for hourly leave. A working-day/balance preview is advisory and server validation still checks eligibility, overlap and entitlements.

@@ -1,10 +1,10 @@
 "use client";
+import { MobileNavigation } from "./mobile-navigation";
 import { hubs, hubFor, canOpenPage } from "./workspace-navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import dynamic from "next/dynamic";
 import {
   LayoutDashboard,
-  Clock3,
   ClipboardCheck,
   MessageSquare,
   Settings,
@@ -17,6 +17,7 @@ import {
   Download,
   ChevronRight,
   ArrowLeft,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,7 +36,7 @@ import { type Workspace, type Kind, type HRRecord } from "@/lib/types";
 import type { AssistantIntent } from "./assistant-page";
 import { toast } from "sonner";
 import { NotificationPanel } from "./operations-page";
-import { requestKinds, reviewOptions } from "@/lib/request-workflow";
+import { pendingDashboardRequests } from "@/lib/dashboard";
 const ApprovalsPage = dynamic(() =>
   import("./approvals-page").then((m) => m.ApprovalsPage),
 );
@@ -97,7 +98,7 @@ const labels: Record<Page, string> = {
   reviews: "Review cycles",
   announcements: "Announcements",
   payments: "Payments",
-  overview: "Overview",
+  overview: "Dashboard",
   people: "People",
   attendance: "Attendance & shifts",
   leave: "Leave",
@@ -156,6 +157,7 @@ function Sidebar({
   logout,
   refresh,
   onCollapse,
+  mobile = false,
 }: {
   workspace: Workspace;
   page: Page;
@@ -163,15 +165,9 @@ function Sidebar({
   logout: () => void;
   refresh: () => Promise<void>;
   onCollapse?: () => void;
+  mobile?: boolean;
 }) {
-  const pending = workspace.records.filter(
-    (r) =>
-      [...requestKinds, "profile_change"].includes(r.kind) &&
-      r.data.status === "Pending" &&
-      reviewOptions(workspace.actor, r, workspace.records).some((o) =>
-        ["Approved", "Rejected", "Returned"].includes(o),
-      ),
-  ).length;
+  const pending = pendingDashboardRequests(workspace).length;
   return (
     <div className="sidebar-inner">
       <div className="sidebar-brand">
@@ -180,8 +176,11 @@ function Sidebar({
           Nonymauz <strong>People</strong>
         </span>
         {onCollapse ? (
-          <button aria-label="Close sidebar" onClick={onCollapse}>
-            <PanelLeftClose size={17} />
+          <button
+            aria-label={mobile ? "Close navigation" : "Close sidebar"}
+            onClick={onCollapse}
+          >
+            {mobile ? <X size={20} /> : <PanelLeftClose size={17} />}
           </button>
         ) : null}
       </div>
@@ -602,33 +601,13 @@ export function WorkspaceApp({
               </button>
             </div>
           </header>
-          <nav className="mobile-bottom-nav" aria-label="Phone navigation">
-            {(
-              [
-                { page: "overview", label: "Home", icon: LayoutDashboard },
-                { page: "attendance", label: "Time", icon: Clock3 },
-                { page: "approvals", label: "Inbox", icon: ClipboardCheck },
-                { page: "assistant", label: "AI", icon: MessageSquare },
-              ] as const
-            ).map((item) => (
-              <button
-                key={item.page}
-                className={page === item.page ? "active" : ""}
-                aria-current={page === item.page ? "page" : undefined}
-                onClick={() => go(item.page)}
-              >
-                <item.icon size={19} />
-                <span>{item.label}</span>
-              </button>
-            ))}
-            <button
-              aria-expanded={mobileOpen}
-              onClick={() => setMobileOpen(true)}
-            >
-              <PanelLeftOpen size={19} />
-              <span>More</span>
-            </button>
-          </nav>
+          <MobileNavigation
+            workspace={workspace}
+            page={visiblePage}
+            go={go}
+            open={mobileOpen}
+            onOpen={() => setMobileOpen(true)}
+          />
           {workspace.truncated ? (
             <div className="info-note">
               This workspace view contains the latest 2,000 records. Export or
@@ -702,7 +681,9 @@ export function WorkspaceApp({
                 initialSection="policies"
               />
             ) : visiblePage === "overview" ? (
-              <OverviewPage />
+              <OverviewPage
+                key={`${workspace.company.id}-${workspace.actor.userId}`}
+              />
             ) : visiblePage === "approvals" ? (
               <ApprovalsPage />
             ) : visiblePage === "calendar" ? (
@@ -756,6 +737,7 @@ export function WorkspaceApp({
             logout={logout}
             refresh={refresh}
             onCollapse={() => setMobileOpen(false)}
+            mobile
           />
         </DialogContent>
       </Dialog>
