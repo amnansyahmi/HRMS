@@ -1,3 +1,4 @@
+import { visibleAIText } from "./ai-stream";
 import { checkPayrollDrafts } from "./payroll-diagnostics";
 import { buildHRDigest } from "./hr-digest";
 import { selectAIRoute, reserveAIUsage, finishAIUsage } from "./ai-usage";
@@ -10,7 +11,7 @@ import {
 } from "./workflow-config";
 import { saveAIProposal } from "./ai-actions";
 import { employmentActReference } from "./legal-reference";
-import { APICallError, generateText } from "ai";
+import { APICallError, generateText, streamText } from "ai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -60,6 +61,7 @@ export async function completeAI(
     model?: string;
     mode?: string;
     images?: { bytes: Buffer; mime: string }[];
+    onText?: (text: string) => void;
   },
 ) {
   const base = process.env.AI_NONYMAUZ_BASE_URL?.trim(),
@@ -89,7 +91,7 @@ export async function completeAI(
     apiKey,
   });
   try {
-    const result = await generateText({
+    const parameters = {
       model: provider.chatModel(model),
       instructions,
       ...(options?.images?.length
@@ -113,17 +115,40 @@ export async function completeAI(
       maxRetries: 0,
       timeout: 55000,
       abortSignal: signal,
-      providerOptions: {
-        // Cloud defaults stream=true; generateText expects one JSON response.
-        // The compatible adapter does not send stream=false automatically.
-        nonymauz: {
-          stream: false,
-          use_rag: false,
-          use_tools: false,
-          mode: options?.mode || "normal",
-        },
+    };
+    let result: {
+      text: string;
+      usage: Awaited<ReturnType<typeof generateText>>["usage"];
+    };
+    const providerOptions = {
+      nonymauz: {
+        stream: !!options?.onText,
+        use_rag: false,
+        use_tools: false,
+        mode: options?.mode || "normal",
       },
-    });
+    };
+    if (options?.onText) {
+      const streamed = streamText({ ...parameters, providerOptions });
+      let text = "",
+        shown = "";
+      for await (const part of streamed.fullStream) {
+        if (part.type === "error") throw part.error;
+        if (part.type === "abort")
+          throw new DOMException("Request stopped", "AbortError");
+        if (part.type === "text-delta") {
+          text += part.text;
+          const next = visibleAIText(text);
+          if (next !== shown) {
+            shown = next;
+            options.onText(next);
+          }
+        }
+      }
+      result = { text, usage: await streamed.usage };
+    } else {
+      result = await generateText({ ...parameters, providerOptions });
+    }
     if (!result.text.trim())
       fail("The AI returned an empty response. Please retry.", 502);
     return { text: result.text, model, usage: result.usage };
@@ -168,7 +193,7 @@ export async function completeAI(
       );
     if (status !== undefined && status >= 200 && status < 300)
       fail(
-        "ai-nonymauz-cloud returned an unsupported response. This request requires a non-streaming chat-completions JSON reply.",
+        "ai-nonymauz-cloud returned an unsupported response. Check that the backend supports the requested chat-completions response format.",
         502,
       );
     fail(
@@ -261,7 +286,12 @@ export async function askAI(
   actor: Actor,
   input: unknown,
   signal?: AbortSignal,
+  events?: {
+    progress: (message: string) => void;
+    text: (text: string) => void;
+  },
 ) {
+  events?.progress("Finding the records available to you…");
   if (
     (
       await db.query<{ is_demo: boolean }>(
@@ -502,7 +532,17 @@ Official legal reference (reviewed snapshot): ${JSON.stringify(employmentActRefe
     started = Date.now();
   let result: Awaited<ReturnType<typeof completeAI>>;
   try {
-    result = await completeAI(fullPrompt, signal, { ...route, images });
+    events?.progress(
+      body.mode === "resume"
+        ? "Reviewing resume evidence…"
+        : "Writing your answer…",
+    );
+    result = await completeAI(fullPrompt, signal, {
+      ...route,
+      images,
+      onText: body.mode === "resume" ? undefined : events?.text,
+    });
+    signal?.throwIfAborted();
     await finishAIUsage(
       usageId,
       "Succeeded",
@@ -521,6 +561,7 @@ Official legal reference (reviewed snapshot): ${JSON.stringify(employmentActRefe
   }
   if (body.mode === "resume")
     result.text = resumeEvidence(result.text, resumeText, rubric);
+  events?.progress("Checking proposed actions and saving the conversation…");
   const proposal = await saveAIProposal(actor, result.text, records, body.mode);
   result.text = proposal.text;
   await transaction(async (tx) => {

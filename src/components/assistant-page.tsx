@@ -31,6 +31,8 @@ import {
   DialogDescription,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { AIActionPreview } from "./ai-action-preview";
+import { readAIEvents } from "@/lib/ai-stream";
 import { api } from "@/lib/client";
 import { toast } from "sonner";
 import { useWorkspace } from "./workspace-context";
@@ -55,6 +57,7 @@ type Message = {
   role: string;
   content: string;
   sources: Source[];
+  pending?: boolean;
   cards?: {
     id: string;
     action: string;
@@ -62,6 +65,7 @@ type Message = {
     expiresAt: string;
     preview?: Record<string, unknown>;
     requiresLocation?: boolean;
+    target?: string;
   }[];
 };
 export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
@@ -73,6 +77,8 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
     [history, setHistory] = useState<Message[]>([]),
     [threadId, setThreadId] = useState<string | undefined>(),
     [busy, setBusy] = useState(false),
+    [progress, setProgress] = useState("Finding your workspace records…"),
+    [sendError, setSendError] = useState(""),
     [uploading, setUploading] = useState(false),
     [attachments, setAttachments] = useState<
       { id: string; filename: string; text: string; size: number }[]
@@ -265,12 +271,17 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
       old = messages;
     setMessage("");
     setBusy(true);
+    setSendError("");
+    setProgress("Finding your workspace records…");
     setMessages([...old, { role: "user", content: current, sources: [] }]);
     abort.current = new AbortController();
     try {
       const response = await fetch("/api/ai", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+        },
         body: JSON.stringify({
           message: current,
           mode,
@@ -280,8 +291,42 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
         }),
         signal: abort.current.signal,
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "AI request failed");
+      if (!response.ok) {
+        const error = await response
+          .json()
+          .catch(() => ({ error: "AI request failed" }));
+        throw new Error(error.error || "AI request failed");
+      }
+      let result:
+        | {
+            threadId: string;
+            sources: Source[];
+            text: string;
+            cards?: Message["cards"];
+          }
+        | undefined;
+      if (
+        response.headers.get("content-type")?.includes("application/x-ndjson")
+      ) {
+        await readAIEvents(response, (event) => {
+          if (event.type === "progress")
+            setProgress(event.message || "Writing your answer…");
+          if (event.type === "text")
+            setMessages([
+              ...old,
+              { role: "user", content: current, sources: [] },
+              {
+                role: "assistant",
+                content: event.text || "",
+                sources: [],
+                pending: true,
+              },
+            ]);
+          if (event.type === "complete") result = event.result as typeof result;
+        });
+      } else result = await response.json();
+      if (!result)
+        throw new Error("The answer was interrupted. Retry your message.");
       setThreadId(result.threadId);
       setMessages([
         ...old,
@@ -297,6 +342,11 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
     } catch (e) {
       setMessages(old);
       setMessage(current);
+      setSendError(
+        (e as Error).name === "AbortError"
+          ? "Request stopped. Your message is ready to send again."
+          : (e as Error).message,
+      );
       toast.error(
         (e as Error).name === "AbortError"
           ? "Request stopped"
@@ -501,22 +551,11 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                                 latest record will be checked.
                               </p>
                               {card.preview ? (
-                                card.action === "letter-draft" ? (
-                                  <div className="action-preview preserve-lines">
-                                    <strong>
-                                      {String(card.preview.title)}
-                                    </strong>
-                                    <p>{String(card.preview.body)}</p>
-                                    <small>
-                                      Save as draft only ·{" "}
-                                      {String(card.preview.effectiveDate)}
-                                    </small>
-                                  </div>
-                                ) : (
-                                  <pre className="action-preview">
-                                    {JSON.stringify(card.preview, null, 2)}
-                                  </pre>
-                                )
+                                <AIActionPreview
+                                  preview={card.preview}
+                                  action={card.action}
+                                  target={card.target}
+                                />
                               ) : null}
                               <Button
                                 size="sm"
@@ -603,44 +642,48 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
                               </Button>
                             </div>
                           ))}
-                          <div className="message-controls">
-                            <ReadAnswer compact text={m.content} />
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label="Copy answer"
-                              onClick={() =>
-                                navigator.clipboard
-                                  .writeText(m.content)
-                                  .then(() => toast.success("Answer copied"))
-                                  .catch(() =>
-                                    toast.error("Select the answer to copy it"),
-                                  )
-                              }
-                            >
-                              <Copy size={14} />
-                            </Button>
-                            {m.sources.length === 1 &&
-                            m.sources[0].kind === "meeting" ? (
+                          {!m.pending ? (
+                            <div className="message-controls">
+                              <ReadAnswer compact text={m.content} />
                               <Button
                                 variant="ghost"
-                                size="sm"
-                                onClick={() => {
-                                  const r = workspace.records.find(
-                                    (r) => r.id === m.sources[0].id,
-                                  );
-                                  if (r)
-                                    edit("meeting", {
-                                      ...r,
-                                      data: { ...r.data, summary: m.content },
-                                    });
-                                }}
+                                size="icon-sm"
+                                aria-label="Copy answer"
+                                onClick={() =>
+                                  navigator.clipboard
+                                    .writeText(m.content)
+                                    .then(() => toast.success("Answer copied"))
+                                    .catch(() =>
+                                      toast.error(
+                                        "Select the answer to copy it",
+                                      ),
+                                    )
+                                }
                               >
-                                <FileText size={13} />
-                                Review as meeting summary
+                                <Copy size={14} />
                               </Button>
-                            ) : null}
-                          </div>
+                              {m.sources.length === 1 &&
+                              m.sources[0].kind === "meeting" ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    const r = workspace.records.find(
+                                      (r) => r.id === m.sources[0].id,
+                                    );
+                                    if (r)
+                                      edit("meeting", {
+                                        ...r,
+                                        data: { ...r.data, summary: m.content },
+                                      });
+                                  }}
+                                >
+                                  <FileText size={13} />
+                                  Review as meeting summary
+                                </Button>
+                              ) : null}
+                            </div>
+                          ) : null}
                           {m.sources.length ? (
                             <details className="sources-panel">
                               <summary>
@@ -668,12 +711,17 @@ export function AssistantPage({ intent }: { intent?: AssistantIntent }) {
               <div className="chat-message ai-message">
                 <div className="thinking">
                   <Loader2 size={16} className="animate-spin" />
-                  Reading your workspace…
+                  {progress}
                 </div>
               </div>
             ) : null}
           </div>
           <div className="composer-area">
+            {sendError ? (
+              <p className="chat-error" role="alert">
+                {sendError}
+              </p>
+            ) : null}
             <form className="chat-composer" onSubmit={send}>
               {requiresRecord ? (
                 <button

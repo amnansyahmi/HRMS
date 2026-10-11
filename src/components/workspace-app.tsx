@@ -1,4 +1,5 @@
 "use client";
+import { canLeaveWorkspace } from "./use-unsaved-changes";
 import { MobileNavigation } from "./mobile-navigation";
 import { hubs, hubFor, canOpenPage } from "./workspace-navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
@@ -191,6 +192,7 @@ function Sidebar({
             aria-label="Switch company"
             value={workspace.company.id}
             onChange={async (e) => {
+              if (!canLeaveWorkspace()) return;
               try {
                 await api("/api/auth/switch", { companyId: e.target.value });
                 await refresh();
@@ -407,6 +409,14 @@ export function WorkspaceApp({
   }, []);
   useEffect(() => {
     const back = () => {
+      if (!canLeaveWorkspace()) {
+        window.history.pushState(
+          { ...window.history.state },
+          "",
+          page === "overview" ? "/" : `/?view=${page}`,
+        );
+        return;
+      }
       const view = new URLSearchParams(window.location.search).get("view");
       setPage(view && view in labels ? (view as Page) : "overview");
       setMobileOpen(false);
@@ -415,10 +425,12 @@ export function WorkspaceApp({
     };
     window.addEventListener("popstate", back);
     return () => window.removeEventListener("popstate", back);
-  }, []);
+  }, [page]);
   function go(p: Page, replace = false) {
     if (!(p in labels)) return;
+    if (p !== page && !canLeaveWorkspace()) return;
     setPage(p);
+    if (p !== page) setForm(null);
     setMobileOpen(false);
     if (p === page && !replace) return;
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
@@ -451,6 +463,7 @@ export function WorkspaceApp({
     }
   }
   async function logout() {
+    if (!canLeaveWorkspace()) return;
     try {
       generation.current++;
       await api("/api/auth/logout", {});

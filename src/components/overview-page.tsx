@@ -1,4 +1,5 @@
 "use client";
+import { PersonalWorkday } from "./personal-workday";
 import { HRDigest } from "./hr-digest";
 import {
   Users,
@@ -10,6 +11,7 @@ import {
   ClipboardCheck,
   UserRound,
   Plus,
+  ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWorkspace } from "./workspace-context";
@@ -35,6 +37,7 @@ import { RequestSummary, RequestReviewDialog } from "./request-review";
 export function OverviewPage() {
   const { workspace, go, edit } = useWorkspace(),
     { actor, company } = workspace;
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const [review, setReview] = useState<HRRecord | null>(null);
   const snapshot = dashboardSnapshot(workspace);
   const { employees, today, attendance, pending, jobs, goals } = snapshot;
@@ -171,15 +174,9 @@ export function OverviewPage() {
           </button>
         ))}
       </div>
-      <div className="dashboard-grid">
-        {show("workday") ? <WorkdayWidget snapshot={snapshot} /> : null}
-        {show("agenda") ? <AgendaWidget snapshot={snapshot} /> : null}
-        {show("activity") ? (
-          <AttendanceActivityWidget snapshot={snapshot} />
-        ) : null}
-        {show("request-mix") ? (
-          <RequestBreakdownWidget snapshot={snapshot} />
-        ) : null}
+      <div
+        className={`dashboard-grid dashboard-priority ${canReview ? "reviewer-home" : "employee-home"}`}
+      >
         {show("requests") ? (
           <section
             className="panel dashboard-widget"
@@ -236,6 +233,8 @@ export function OverviewPage() {
             )}
           </section>
         ) : null}
+        {show("workday") ? <WorkdayWidget snapshot={snapshot} /> : null}
+        {show("agenda") ? <AgendaWidget snapshot={snapshot} /> : null}
         {show("attendance") ? (
           <section
             className="panel dashboard-widget"
@@ -286,79 +285,103 @@ export function OverviewPage() {
             )}
           </section>
         ) : null}
-        {show("digest") ? (
-          <div className="dashboard-digest" data-dashboard-widget="digest">
-            <HRDigest />
-          </div>
-        ) : null}
-        {show("goals") ? (
-          <section
-            className="panel goals-overview dashboard-widget"
-            data-dashboard-widget="goals"
-          >
-            <div className="panel-heading">
-              <div>
-                <h2>Goals in progress</h2>
-                <p>
-                  {goals.length} active {goals.length === 1 ? "goal" : "goals"}
-                </p>
-              </div>
-              <InlineLink onClick={() => go("performance")}>
-                All goals
-              </InlineLink>
-            </div>
-            {goals.length ? (
-              <div className="goal-preview-grid">
-                {goals.slice(0, 3).map((g) => (
-                  <button
-                    className="goal-preview"
-                    key={g.id}
-                    onClick={() => go("performance")}
-                  >
-                    <small>
-                      {g.data.scope === "Company"
-                        ? "Company goal"
-                        : g.data.scope === "Team"
-                          ? "Team goal"
-                          : employeeName(g.employee_id)}
-                    </small>
-                    <h3>{String(g.data.title)}</h3>
-                    <div
-                      className="mini-progress"
-                      role="progressbar"
-                      aria-label={String(g.data.title)}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={goalPercent(
-                        g.data.progress,
-                        g.data.target,
-                      )}
-                    >
-                      <span
-                        style={{
-                          width: `${goalPercent(g.data.progress, g.data.target)}%`,
-                        }}
-                      />
-                    </div>
-                    <div className="row-between">
-                      <span>
-                        {g.data.progress as number} / {g.data.target as number}{" "}
-                        {String(g.data.unit)}
-                      </span>
-                      <ArrowRight size={15} />
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <Empty
-                title="Make room for growth"
-                description="Add team goals and keep progress in view."
-              />
-            )}
-          </section>
-        ) : null}
       </div>
+      <PersonalWorkday today={today} />
+      <section
+        className={`dashboard-insights ${insightsOpen ? "insights-open" : ""}`}
+        aria-label="Work insights"
+      >
+        <button
+          className="insights-toggle"
+          aria-expanded={insightsOpen}
+          aria-controls="work-insights"
+          onClick={() => setInsightsOpen((value) => !value)}
+        >
+          Attendance and request insights
+          <ChevronDown size={18} aria-hidden="true" />
+        </button>
+        <div id="work-insights" className="dashboard-grid">
+          {show("activity") ? (
+            <AttendanceActivityWidget snapshot={snapshot} />
+          ) : null}
+          {show("request-mix") ? (
+            <RequestBreakdownWidget snapshot={snapshot} />
+          ) : null}
+          {show("digest") ? (
+            <div className="dashboard-digest" data-dashboard-widget="digest">
+              <HRDigest />
+            </div>
+          ) : null}
+          {show("goals") ? (
+            <section
+              className="panel goals-overview dashboard-widget"
+              data-dashboard-widget="goals"
+            >
+              <div className="panel-heading">
+                <div>
+                  <h2>Goals in progress</h2>
+                  <p>
+                    {goals.length} active{" "}
+                    {goals.length === 1 ? "goal" : "goals"}
+                  </p>
+                </div>
+                <InlineLink onClick={() => go("performance")}>
+                  All goals
+                </InlineLink>
+              </div>
+              {goals.length ? (
+                <div className="goal-preview-grid">
+                  {goals.slice(0, 3).map((g) => (
+                    <button
+                      className="goal-preview"
+                      key={g.id}
+                      onClick={() => go("performance")}
+                    >
+                      <small>
+                        {g.data.scope === "Company"
+                          ? "Company goal"
+                          : g.data.scope === "Team"
+                            ? "Team goal"
+                            : employeeName(g.employee_id)}
+                      </small>
+                      <h3>{String(g.data.title)}</h3>
+                      <div
+                        className="mini-progress"
+                        role="progressbar"
+                        aria-label={String(g.data.title)}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={goalPercent(
+                          g.data.progress,
+                          g.data.target,
+                        )}
+                      >
+                        <span
+                          style={{
+                            width: `${goalPercent(g.data.progress, g.data.target)}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="row-between">
+                        <span>
+                          {g.data.progress as number} /{" "}
+                          {g.data.target as number} {String(g.data.unit)}
+                        </span>
+                        <ArrowRight size={15} />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <Empty
+                  title="Make room for growth"
+                  description="Add team goals and keep progress in view."
+                />
+              )}
+            </section>
+          ) : null}
+        </div>
+      </section>
       {dashboardWidgets
         .filter((widget) => widget.id !== "workday" || snapshot.own)
         .every((widget) => hidden.includes(widget.id)) ? (

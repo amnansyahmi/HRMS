@@ -1,6 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Clock3, CalendarDays, ArrowRight, LogIn, LogOut } from "lucide-react";
+import { elapsedWork } from "@/lib/personal-workday";
 import type { dashboardSnapshot } from "@/lib/dashboard";
 import { leaveEntitlement } from "@/lib/leave-entitlement";
 import { addCalendarDays } from "@/lib/hr-calendar";
@@ -12,6 +13,12 @@ type Snapshot = ReturnType<typeof dashboardSnapshot>;
 export function WorkdayWidget({ snapshot }: { snapshot: Snapshot }) {
   const { workspace, go, edit } = useWorkspace();
   const { own, open, today, records, events } = snapshot;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, [open]);
   if (!own) return null;
   const policy = records.find(
     (r) =>
@@ -59,6 +66,14 @@ export function WorkdayWidget({ snapshot }: { snapshot: Snapshot }) {
             ? `${start ? `Started at ${start}` : "Session in progress"} · ${String(open.data.location || "Workplace")}`
             : "Open attendance to choose your workplace and clock in."}
         </p>
+        {open ? (
+          <div className="work-duration">
+            <small>Work duration</small>
+            <strong>
+              {elapsedWork(open.data.clockIn, now) || "Session in progress"}
+            </strong>
+          </div>
+        ) : null}
         <Button onClick={() => go("attendance")}>
           {open ? <LogOut size={16} /> : <LogIn size={16} />}
           {open ? "Manage clock-out" : "Clock in"}

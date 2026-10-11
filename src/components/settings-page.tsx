@@ -38,6 +38,8 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useWorkspace } from "./workspace-context";
 import { PageHeader, Person, Status, NativeSelect } from "./common";
+import { useUnsavedChanges } from "./use-unsaved-changes";
+import { useFormFeedback, FormErrorSummary } from "./form-feedback";
 import { api, shortDate } from "@/lib/client";
 import { toast } from "sonner";
 export function SettingsPage({
@@ -78,8 +80,24 @@ export function SettingsPage({
     employees = workspace.records.filter(
       (r) => r.kind === "employee" && r.data.status !== "Archived",
     );
-  async function save(event: React.FormEvent) {
-    event.preventDefault();
+  const { formRef, errors, labels, validate, clear } = useFormFeedback();
+  const [saved, setSaved] = useState(() =>
+    JSON.stringify({ name, settings, holidays, statusLines, typeLines }),
+  );
+  const [saveError, setSaveError] = useState("");
+  const draft = JSON.stringify({
+    name,
+    settings,
+    holidays,
+    statusLines,
+    typeLines,
+  });
+  const dirty = saved !== draft;
+  useUnsavedChanges(dirty);
+  async function save(event?: React.FormEvent) {
+    event?.preventDefault();
+    if (!validate()) return;
+    setSaveError("");
     setBusy(true);
     try {
       await api(
@@ -105,8 +123,10 @@ export function SettingsPage({
         "PATCH",
       );
       await refresh();
+      setSaved(draft);
       toast.success("Settings saved");
     } catch (e) {
+      setSaveError((e as Error).message);
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
@@ -158,6 +178,26 @@ export function SettingsPage({
         title="Workspace settings"
         description="Manage your workspace, people and preferences."
       />
+      {owner && ["general", "employees", "ai"].includes(section) ? (
+        <div className="settings-savebar">
+          <span role="status">
+            {dirty ? "You have unsaved changes" : "Settings are up to date"}
+          </span>
+          <Button disabled={busy || !dirty} onClick={() => void save()}>
+            {busy ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Save size={16} />
+            )}
+            Save settings
+          </Button>
+        </div>
+      ) : null}
+      {saveError ? (
+        <p className="form-server-error" role="alert">
+          {saveError}
+        </p>
+      ) : null}
       <Tabs
         value={section}
         onValueChange={setSection}
@@ -329,28 +369,31 @@ export function SettingsPage({
                       }))
                     }
                   />
-                  <p>Save these changes using the button below.</p>
+                  <p>Save these changes using the button above.</p>
                 </section>
               </>
-            ) : null}
-
-            {owner ? (
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  save({ preventDefault: () => {} } as React.FormEvent)
-                }
-              >
-                <Save size={16} />
-                Save settings
-              </Button>
             ) : null}
           </TabsContent>
           <TabsContent value="security">
             <SecuritySettings />
           </TabsContent>
           <TabsContent value="general">
-            <form className="settings-form" onSubmit={save}>
+            <form
+              ref={formRef}
+              noValidate
+              className="settings-form"
+              onSubmit={save}
+              onChange={(event) => {
+                const field = event.target;
+                if (
+                  field instanceof HTMLInputElement ||
+                  field instanceof HTMLSelectElement ||
+                  field instanceof HTMLTextAreaElement
+                )
+                  clear(field);
+              }}
+            >
+              <FormErrorSummary errors={errors} labels={labels} />
               <section className="settings-section">
                 <h2>Company details</h2>
                 <div className="record-form-grid">
@@ -363,6 +406,11 @@ export function SettingsPage({
                       onChange={(e) => setName(e.target.value)}
                       required
                     />
+                    {errors["company-name"] ? (
+                      <p id="company-name-error" className="field-error">
+                        {errors["company-name"]}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="form-field">
                     <Label htmlFor="registration">Registration number</Label>
@@ -500,16 +548,6 @@ export function SettingsPage({
                   <ExternalLink size={14} />
                 </a>
               </section>
-              {owner ? (
-                <Button disabled={busy} type="submit">
-                  {busy ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <Save size={15} />
-                  )}
-                  Save settings
-                </Button>
-              ) : null}
             </form>
           </TabsContent>
           <TabsContent value="access">
