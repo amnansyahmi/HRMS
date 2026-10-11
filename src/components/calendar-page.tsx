@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import styles from "./calendar-page.module.css";
 import { ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { useWorkspace } from "./workspace-context";
 import { PageHeader, NativeSelect } from "./common";
@@ -64,17 +65,19 @@ export function CalendarPage({ compact = false }: { compact?: boolean }) {
     category,
   });
   return (
-    <>
+    <div className={`${styles.surface} ${compact ? styles.compact : ""}`}>
       {!compact ? (
         <div className="daily-header">
           <PageHeader
             title="Team calendar"
-            description={`Approved time away, workplace holidays and rotating shifts. Times use ${workspace.company.settings.timezone}.`}
             action={
-              <Button variant="outline" asChild>
+              <Button variant="ghost" asChild>
                 <a href={`/api/export?${download}`}>
                   <Download size={15} />
-                  Download calendar
+                  <span className={styles.downloadLabel}>
+                    Download calendar
+                  </span>
+                  <span className={styles.shortDownloadLabel}>Export</span>
                 </a>
               </Button>
             }
@@ -87,7 +90,7 @@ export function CalendarPage({ compact = false }: { compact?: boolean }) {
         <div className="calendar-month">
           <Button
             size="icon"
-            variant="outline"
+            variant="ghost"
             aria-label="Previous month"
             onClick={() => navigate(-1)}
           >
@@ -96,22 +99,31 @@ export function CalendarPage({ compact = false }: { compact?: boolean }) {
           <label className="sr-only" htmlFor="calendar-month">
             Calendar month
           </label>
-          <Input
-            id="calendar-month"
-            type="month"
-            min="2020-01"
-            max="2100-12"
-            value={month}
-            onChange={(e) => {
-              if (/^\d{4}-(0[1-9]|1[0-2])$/.test(e.target.value)) {
-                setMonth(e.target.value);
-                setSelected(e.target.value + "-01");
-              }
-            }}
-          />
+          <div className={styles.monthPicker}>
+            <span aria-hidden="true">
+              {new Date(start + "T00:00:00Z").toLocaleDateString("en-MY", {
+                month: "long",
+                year: "numeric",
+                timeZone: "UTC",
+              })}
+            </span>
+            <Input
+              id="calendar-month"
+              type="month"
+              min="2020-01"
+              max="2100-12"
+              value={month}
+              onChange={(e) => {
+                if (/^\d{4}-(0[1-9]|1[0-2])$/.test(e.target.value)) {
+                  setMonth(e.target.value);
+                  setSelected(e.target.value + "-01");
+                }
+              }}
+            />
+          </div>
           <Button
             size="icon"
-            variant="outline"
+            variant="ghost"
             aria-label="Next month"
             onClick={() => navigate(1)}
           >
@@ -163,7 +175,11 @@ export function CalendarPage({ compact = false }: { compact?: boolean }) {
         ) : null}
       </div>
       {!compact ? (
-        <>
+        <details className={styles.options}>
+          <summary>Calendar options</summary>
+          <p className="muted">
+            Times use {workspace.company.settings.timezone}.
+          </p>
           <label className="calendar-pending">
             <input
               type="checkbox"
@@ -181,7 +197,7 @@ export function CalendarPage({ compact = false }: { compact?: boolean }) {
               : "Your calendar contains your own requests and assigned shifts."}{" "}
             Absence events omit leave reasons, receipts and medical details.
           </p>
-        </>
+        </details>
       ) : null}
       <div className={`calendar-grid ${compact ? "calendar-compact" : ""}`}>
         <div className="calendar-weekdays">
@@ -238,7 +254,15 @@ export function CalendarPage({ compact = false }: { compact?: boolean }) {
           )}
         </div>
       </div>
-      <section className="calendar-agenda panel" aria-live="polite">
+      <div className={styles.legend} aria-label="Event indicators">
+        <span>
+          <i /> Approved / holiday
+        </span>
+        <span>
+          <i className={styles.pendingDot} /> Pending
+        </span>
+      </div>
+      <section className="calendar-agenda" aria-live="polite">
         <h2>
           {new Date(selected + "T00:00:00Z").toLocaleDateString("en-MY", {
             weekday: "long",
@@ -255,12 +279,8 @@ export function CalendarPage({ compact = false }: { compact?: boolean }) {
         ) : (
           <p className="muted">No events on this day.</p>
         )}
-        <p className="muted calendar-legend">
-          Solid dots: approved events and holidays · Outlined dots: pending
-          requests
-        </p>
       </section>
-    </>
+    </div>
   );
 }
 function Event({ event: e }: { event: CalendarEvent }) {

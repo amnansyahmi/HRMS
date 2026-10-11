@@ -999,11 +999,6 @@ body:has(.chat-content) .main-shell {
   .mobile-bottom-nav > button.active .phone-nav-icon {
     background: var(--brand-soft);
   }
-  .mobile-bottom-nav > button.phone-ai .phone-nav-icon {
-    height: 32px;
-    background: var(--primary);
-    color: var(--primary-foreground);
-  }
   .phone-nav-badge {
     position: absolute;
     top: -3px;

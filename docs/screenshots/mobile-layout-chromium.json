@@ -1,0 +1,25 @@
+{
+  "viewports": [
+    320,
+    390,
+    430
+  ],
+  "forms": [
+    "claim",
+    "overtime",
+    "leave"
+  ],
+  "noFieldOverlap": true,
+  "noHorizontalPan": true,
+  "noHorizontalOverflow": true,
+  "backgroundScrollLocked": true,
+  "verticalFormScroll": true,
+  "visibleFooter": true,
+  "keepAndDiscardEdits": true,
+  "calendarNavigation": true,
+  "noNestedCalendarCards": true,
+  "desktopDialog": true,
+  "browserEngine": "Chromium",
+  "touchSwipes": true,
+  "browserErrors": []
+}

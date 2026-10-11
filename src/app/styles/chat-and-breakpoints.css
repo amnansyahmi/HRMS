@@ -937,8 +937,10 @@
     gap: 12px;
   }
   .leave-balances > div {
-    padding: 16px 14px;
+    padding: 12px 0;
     gap: 9px;
+    border: 0;
+    border-radius: 0;
   }
   .leave-balances svg {
     display: none;
