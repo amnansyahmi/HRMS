@@ -798,11 +798,12 @@
 }
 .record-form-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
   padding: 8px 0 26px;
 }
 .form-field {
+  min-width: 0;
   display: grid;
   gap: 9px;
 }

@@ -1,5 +1,6 @@
 "use client";
 import { useState, Fragment } from "react";
+import styles from "./record-form.module.css";
 import { Plus, Trash2, Upload, Loader2, ExternalLink } from "lucide-react";
 import {
   Dialog,
@@ -778,7 +779,10 @@ export function RecordForm({
         if (!open) requestClose();
       }}
     >
-      <DialogContent className="record-dialog sm:max-w-[650px]">
+      <DialogContent
+        mobileFullscreen
+        className={`record-dialog sm:max-w-[650px] ${styles.dialog}`}
+      >
         <DialogHeader>
           <DialogTitle>
             {record ? "Edit" : "Add"} {titles[kind] || kind}
@@ -788,7 +792,11 @@ export function RecordForm({
               ? "Enter verified deductions. This draft becomes a payslip after publication."
               : kind === "leave"
                 ? "Working days and available balance are checked when submitted."
-                : "Keep your workspace records up to date."}
+                : kind === "claim"
+                  ? "Add the expense details and attach your receipt."
+                  : kind === "overtime"
+                    ? "Record the extra hours worked and a reason."
+                    : "Complete the details below."}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -805,474 +813,460 @@ export function RecordForm({
               clear(field);
           }}
         >
-          <FormErrorSummary errors={errors} labels={labels} />
-          {saveError ? (
-            <p className="form-server-error" role="alert">
-              {saveError}
-            </p>
-          ) : null}
-          {leavePreview ? (
-            <p className="info-note mb-4" role="status">
-              {leavePreview}
-            </p>
-          ) : null}
-          {claimPolicy ? (
-            <div className="info-note mb-4">
-              <strong>
-                {String(claimPolicy.data.name)} ·{" "}
-                {String(claimPolicy.data.period)}
-              </strong>
-              <p>
-                {claimPolicy.data.period === "Per trip" &&
-                !String(data.tripReference || "").trim()
-                  ? "Enter a trip reference to check its remaining balance."
-                  : `${money(Math.max(0, Number(claimPolicy.data.limit) - claimReserved))} available; ${money(claimReserved)} reserved or paid in this period.`}{" "}
-                Balance is rechecked when you submit.
+          <div className={styles.body}>
+            <FormErrorSummary errors={errors} labels={labels} />
+            {saveError ? (
+              <p className="form-server-error" role="alert">
+                {saveError}
               </p>
-            </div>
-          ) : null}
-          <div className="record-form-grid">
-            {[
-              "leave",
-              "claim",
-              "goal",
-              "document",
-              "asset",
-              "lifecycle",
-              "letter",
-              "overtime",
-              "time_off",
-              "attendance_correction",
-              "lateness",
-              "evaluation",
-              "goal_update",
-            ].includes(kind) &&
-            !record &&
-            !(kind === "goal" && data.scope && data.scope !== "Individual") &&
-            (staff ||
-              (workspace.actor.role === "manager" && kind === "goal")) ? (
-              <div className="form-field full">
-                <Label htmlFor="target-employee">Employee</Label>
-                <select
-                  className="native-select"
-                  id="target-employee"
-                  required
-                  value={employeeId}
-                  onChange={(e) => setEmployeeId(e.target.value)}
-                >
-                  <option value="">Choose employee</option>
-                  {employees
-                    .filter(
-                      (e) =>
-                        staff ||
-                        e.id === workspace.actor.employeeId ||
-                        e.data.managerId === workspace.actor.employeeId,
-                    )
-                    .map((e) => (
-                      <option key={e.id} value={e.id}>
-                        {String(e.data.name)}
-                      </option>
-                    ))}
-                </select>
+            ) : null}
+            {leavePreview ? (
+              <p className="info-note mb-4" role="status">
+                {leavePreview}
+              </p>
+            ) : null}
+            {claimPolicy ? (
+              <div className="info-note mb-4">
+                <strong>
+                  {String(claimPolicy.data.name)} ·{" "}
+                  {String(claimPolicy.data.period)}
+                </strong>
+                <p>
+                  {claimPolicy.data.period === "Per trip" &&
+                  !String(data.tripReference || "").trim()
+                    ? "Enter a trip reference to check its remaining balance."
+                    : `${money(Math.max(0, Number(claimPolicy.data.limit) - claimReserved))} available; ${money(claimReserved)} reserved or paid in this period.`}{" "}
+                  Balance is rechecked when you submit.
+                </p>
               </div>
             ) : null}
-            {(fields[kind] || [])
-              .filter(
-                (f) =>
-                  (!selfGoal || ["progress", "status"].includes(f.key)) &&
-                  (kind !== "leave" ||
-                    (f.key !== "leaveTypeId" &&
-                      (!["hours", "startHour"].includes(f.key) ||
-                        data.unit === "Hours"))),
-              )
-              .map((f) => {
-                const id = `field-${f.key}`;
-                const options =
-                  kind === "leave" && f.key === "type"
-                    ? [
-                        ...["Annual", "Sick", "Unpaid", "Other"].map(
-                          (value) => ({ value, label: value }),
-                        ),
-                        ...leavePolicies.map((p) => ({
-                          value: p.id,
-                          label: String(p.data.name),
-                        })),
-                      ]
-                    : f.source
-                      ? workspace.records
-                          .filter(
-                            (r) => r.kind === f.source && r.id !== record?.id,
-                          )
-                          .map((r) => ({
-                            value: r.id,
-                            label: String(
-                              r.data.name ||
-                                r.data.title ||
-                                r.data.workDate ||
-                                r.data.description ||
-                                r.kind,
-                            ),
-                          }))
-                      : (kind === "employee" && f.key === "employmentStatus"
-                          ? workspace.company.settings.employeeStatuses.map(
-                              (s) => s.name,
+            <div className="record-form-grid">
+              {[
+                "leave",
+                "claim",
+                "goal",
+                "document",
+                "asset",
+                "lifecycle",
+                "letter",
+                "overtime",
+                "time_off",
+                "attendance_correction",
+                "lateness",
+                "evaluation",
+                "goal_update",
+              ].includes(kind) &&
+              !record &&
+              !(kind === "goal" && data.scope && data.scope !== "Individual") &&
+              (staff ||
+                (workspace.actor.role === "manager" && kind === "goal")) ? (
+                <div className="form-field full">
+                  <Label htmlFor="target-employee">Employee</Label>
+                  <select
+                    className="native-select"
+                    id="target-employee"
+                    required
+                    value={employeeId}
+                    onChange={(e) => setEmployeeId(e.target.value)}
+                  >
+                    <option value="">Choose employee</option>
+                    {employees
+                      .filter(
+                        (e) =>
+                          staff ||
+                          e.id === workspace.actor.employeeId ||
+                          e.data.managerId === workspace.actor.employeeId,
+                      )
+                      .map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {String(e.data.name)}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              ) : null}
+              {(fields[kind] || [])
+                .filter(
+                  (f) =>
+                    (!selfGoal || ["progress", "status"].includes(f.key)) &&
+                    (kind !== "leave" ||
+                      (f.key !== "leaveTypeId" &&
+                        (!["hours", "startHour"].includes(f.key) ||
+                          data.unit === "Hours"))),
+                )
+                .map((f) => {
+                  const id = `field-${f.key}`;
+                  const options =
+                    kind === "leave" && f.key === "type"
+                      ? [
+                          ...["Annual", "Sick", "Unpaid", "Other"].map(
+                            (value) => ({ value, label: value }),
+                          ),
+                          ...leavePolicies.map((p) => ({
+                            value: p.id,
+                            label: String(p.data.name),
+                          })),
+                        ]
+                      : f.source
+                        ? workspace.records
+                            .filter(
+                              (r) => r.kind === f.source && r.id !== record?.id,
                             )
-                          : kind === "employee" && f.key === "employmentType"
-                            ? workspace.company.settings.employeeTypes
-                            : f.options || []
-                        ).map((v) => ({ value: v, label: v }));
-                const advanced =
-                  kind === "employee" &&
-                  employeeDetails.some((field) => field.key === f.key);
-                const heading =
-                  kind === "employee"
-                    ? (
-                        {
-                          name: "Profile",
-                          departmentId: "Employment",
-                          salary: "Pay and leave",
-                          [employeeDetails[0].key]:
-                            "Personal and statutory details",
-                        } as Record<string, string>
-                      )[f.key]
-                    : undefined;
-                return (
-                  <Fragment key={f.key}>
-                    {heading ? (
-                      <div className="form-section-heading full">
-                        <h3>{heading}</h3>
-                        {advanced ? (
-                          <button
-                            type="button"
-                            aria-expanded={expanded}
-                            onClick={() => setExpanded((old) => !old)}
+                            .map((r) => ({
+                              value: r.id,
+                              label: String(
+                                r.data.name ||
+                                  r.data.title ||
+                                  r.data.workDate ||
+                                  r.data.description ||
+                                  r.kind,
+                              ),
+                            }))
+                        : (kind === "employee" && f.key === "employmentStatus"
+                            ? workspace.company.settings.employeeStatuses.map(
+                                (s) => s.name,
+                              )
+                            : kind === "employee" && f.key === "employmentType"
+                              ? workspace.company.settings.employeeTypes
+                              : f.options || []
+                          ).map((v) => ({ value: v, label: v }));
+                  const advanced =
+                    kind === "employee" &&
+                    employeeDetails.some((field) => field.key === f.key);
+                  const heading =
+                    kind === "employee"
+                      ? (
+                          {
+                            name: "Profile",
+                            departmentId: "Employment",
+                            salary: "Pay and leave",
+                            [employeeDetails[0].key]:
+                              "Personal and statutory details",
+                          } as Record<string, string>
+                        )[f.key]
+                      : undefined;
+                  return (
+                    <Fragment key={f.key}>
+                      {heading ? (
+                        <div className="form-section-heading full">
+                          <h3>{heading}</h3>
+                          {advanced ? (
+                            <button
+                              type="button"
+                              aria-expanded={expanded}
+                              onClick={() => setExpanded((old) => !old)}
+                            >
+                              {expanded
+                                ? "Hide optional details"
+                                : "Show optional details"}
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <div
+                        hidden={advanced && !expanded}
+                        className={`form-field ${["textarea", "multi", "boolean"].includes(f.type || "") ? "full" : ""}`}
+                      >
+                        {f.type !== "boolean" ? (
+                          <Label htmlFor={id}>
+                            {f.label}
+                            {f.required ? (
+                              <span className="required"> *</span>
+                            ) : null}
+                          </Label>
+                        ) : null}
+                        {f.type === "lines" ? (
+                          <Textarea
+                            id={id}
+                            rows={4}
+                            value={lineValues[f.key] || ""}
+                            onChange={(e) =>
+                              setLineValues((v) => ({
+                                ...v,
+                                [f.key]: e.target.value,
+                              }))
+                            }
+                          />
+                        ) : f.type === "textarea" ? (
+                          <Textarea
+                            id={id}
+                            required={f.required}
+                            value={String(data[f.key] || "")}
+                            rows={
+                              f.key === "resume" || f.key === "transcript"
+                                ? 6
+                                : 4
+                            }
+                            onChange={(e) => change(f.key, e.target.value)}
+                          />
+                        ) : f.type === "select" ? (
+                          <select
+                            id={id}
+                            className="native-select"
+                            required={f.required}
+                            value={String(
+                              kind === "leave" && f.key === "type"
+                                ? data.leaveTypeId || data.type || "Annual"
+                                : data[f.key] || "",
+                            )}
+                            onChange={(e) =>
+                              kind === "leave" && f.key === "type"
+                                ? setData((d) => ({
+                                    ...d,
+                                    type: String(
+                                      leavePolicies.find(
+                                        (p) => p.id === e.target.value,
+                                      )?.data.name || e.target.value,
+                                    ),
+                                    leaveTypeId: leavePolicies.some(
+                                      (p) => p.id === e.target.value,
+                                    )
+                                      ? e.target.value
+                                      : null,
+                                  }))
+                                : change(
+                                    f.key,
+                                    f.key === "rating"
+                                      ? e.target.value
+                                        ? Number(e.target.value)
+                                        : null
+                                      : e.target.value || null,
+                                  )
+                            }
                           >
-                            {expanded
-                              ? "Hide optional details"
-                              : "Show optional details"}
-                          </button>
+                            {f.source || f.key === "rating" ? (
+                              <option value="">
+                                {f.source ? "Choose…" : "Not evaluated"}
+                              </option>
+                            ) : null}
+                            {options.map((o) => (
+                              <option key={o.value} value={o.value}>
+                                {o.label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : f.type === "boolean" ? (
+                          <label className="check-label">
+                            <Checkbox
+                              id={id}
+                              checked={!!data[f.key]}
+                              onCheckedChange={(v) => change(f.key, v === true)}
+                            />
+                            {f.label}
+                          </label>
+                        ) : f.type === "multi" ? (
+                          <div className="multi-select">
+                            {options.map((o) => (
+                              <label className="check-label" key={o.value}>
+                                <Checkbox
+                                  checked={(
+                                    (data[f.key] as string[]) || []
+                                  ).includes(o.value)}
+                                  onCheckedChange={(v) =>
+                                    change(
+                                      f.key,
+                                      v
+                                        ? [
+                                            ...((data[f.key] as string[]) ||
+                                              []),
+                                            o.value,
+                                          ]
+                                        : (data[f.key] as string[]).filter(
+                                            (id) => id !== o.value,
+                                          ),
+                                    )
+                                  }
+                                />
+                                {o.label}
+                              </label>
+                            ))}
+                          </div>
+                        ) : (
+                          <Input
+                            id={id}
+                            required={f.required}
+                            type={
+                              f.key === "email" ? "email" : f.type || "text"
+                            }
+                            min={f.type === "number" ? (f.min ?? 0) : undefined}
+                            step={
+                              f.type === "number" ? f.step || "0.01" : undefined
+                            }
+                            value={
+                              f.type === "datetime-local" && data[f.key]
+                                ? new Date(String(data[f.key]))
+                                    .toLocaleString("sv-SE")
+                                    .replace(" ", "T")
+                                    .slice(0, 16)
+                                : String(data[f.key] ?? "")
+                            }
+                            onChange={(e) =>
+                              change(
+                                f.key,
+                                f.type === "number"
+                                  ? !e.target.value &&
+                                    [
+                                      "taxableNormal",
+                                      "taxableAdditional",
+                                      "epfWages",
+                                      "epfNormalWages",
+                                      "socsoWages",
+                                      "latitude",
+                                      "longitude",
+                                    ].includes(f.key)
+                                    ? null
+                                    : Number(e.target.value)
+                                  : f.type === "datetime-local"
+                                    ? e.target.value
+                                      ? new Date(e.target.value).toISOString()
+                                      : null
+                                    : f.type === "date" && !e.target.value
+                                      ? null
+                                      : e.target.value,
+                              )
+                            }
+                          />
+                        )}
+                        {errors[id] ? (
+                          <p className="field-error" id={`${id}-error`}>
+                            {errors[id]}
+                          </p>
                         ) : null}
                       </div>
-                    ) : null}
-                    <div
-                      hidden={advanced && !expanded}
-                      className={`form-field ${["textarea", "multi", "boolean"].includes(f.type || "") ? "full" : ""}`}
-                    >
-                      {f.type !== "boolean" ? (
-                        <Label htmlFor={id}>
-                          {f.label}
-                          {f.required ? (
-                            <span className="required"> *</span>
-                          ) : null}
-                        </Label>
-                      ) : null}
-                      {f.type === "lines" ? (
-                        <Textarea
-                          id={id}
-                          rows={4}
-                          value={lineValues[f.key] || ""}
-                          onChange={(e) =>
-                            setLineValues((v) => ({
-                              ...v,
-                              [f.key]: e.target.value,
-                            }))
+                    </Fragment>
+                  );
+                })}
+              {kind === "shift" ? (
+                <div className="form-field full">
+                  <Label>Working days</Label>
+                  <div className="day-picker">
+                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+                      (day, i) => (
+                        <Button
+                          type="button"
+                          key={day}
+                          variant={
+                            (data.days as number[]).includes(i)
+                              ? "default"
+                              : "outline"
                           }
-                        />
-                      ) : f.type === "textarea" ? (
-                        <Textarea
-                          id={id}
-                          required={f.required}
-                          value={String(data[f.key] || "")}
-                          rows={
-                            f.key === "resume" || f.key === "transcript" ? 6 : 4
-                          }
-                          onChange={(e) => change(f.key, e.target.value)}
-                        />
-                      ) : f.type === "select" ? (
-                        <select
-                          id={id}
-                          className="native-select"
-                          required={f.required}
-                          value={String(
-                            kind === "leave" && f.key === "type"
-                              ? data.leaveTypeId || data.type || "Annual"
-                              : data[f.key] || "",
-                          )}
-                          onChange={(e) =>
-                            kind === "leave" && f.key === "type"
-                              ? setData((d) => ({
-                                  ...d,
-                                  type: String(
-                                    leavePolicies.find(
-                                      (p) => p.id === e.target.value,
-                                    )?.data.name || e.target.value,
-                                  ),
-                                  leaveTypeId: leavePolicies.some(
-                                    (p) => p.id === e.target.value,
-                                  )
-                                    ? e.target.value
-                                    : null,
-                                }))
-                              : change(
-                                  f.key,
-                                  f.key === "rating"
-                                    ? e.target.value
-                                      ? Number(e.target.value)
-                                      : null
-                                    : e.target.value || null,
-                                )
-                          }
-                        >
-                          {f.source || f.key === "rating" ? (
-                            <option value="">
-                              {f.source ? "Choose…" : "Not evaluated"}
-                            </option>
-                          ) : null}
-                          {options.map((o) => (
-                            <option key={o.value} value={o.value}>
-                              {o.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : f.type === "boolean" ? (
-                        <label className="check-label">
-                          <Checkbox
-                            id={id}
-                            checked={!!data[f.key]}
-                            onCheckedChange={(v) => change(f.key, v === true)}
-                          />
-                          {f.label}
-                        </label>
-                      ) : f.type === "multi" ? (
-                        <div className="multi-select">
-                          {options.map((o) => (
-                            <label className="check-label" key={o.value}>
-                              <Checkbox
-                                checked={(
-                                  (data[f.key] as string[]) || []
-                                ).includes(o.value)}
-                                onCheckedChange={(v) =>
-                                  change(
-                                    f.key,
-                                    v
-                                      ? [
-                                          ...((data[f.key] as string[]) || []),
-                                          o.value,
-                                        ]
-                                      : (data[f.key] as string[]).filter(
-                                          (id) => id !== o.value,
-                                        ),
-                                  )
-                                }
-                              />
-                              {o.label}
-                            </label>
-                          ))}
-                        </div>
-                      ) : (
-                        <Input
-                          id={id}
-                          required={f.required}
-                          type={f.key === "email" ? "email" : f.type || "text"}
-                          min={f.type === "number" ? (f.min ?? 0) : undefined}
-                          step={
-                            f.type === "number" ? f.step || "0.01" : undefined
-                          }
-                          value={
-                            f.type === "datetime-local" && data[f.key]
-                              ? new Date(String(data[f.key]))
-                                  .toLocaleString("sv-SE")
-                                  .replace(" ", "T")
-                                  .slice(0, 16)
-                              : String(data[f.key] ?? "")
-                          }
-                          onChange={(e) =>
+                          size="sm"
+                          onClick={() =>
                             change(
-                              f.key,
-                              f.type === "number"
-                                ? !e.target.value &&
-                                  [
-                                    "taxableNormal",
-                                    "taxableAdditional",
-                                    "epfWages",
-                                    "epfNormalWages",
-                                    "socsoWages",
-                                    "latitude",
-                                    "longitude",
-                                  ].includes(f.key)
-                                  ? null
-                                  : Number(e.target.value)
-                                : f.type === "datetime-local"
-                                  ? e.target.value
-                                    ? new Date(e.target.value).toISOString()
-                                    : null
-                                  : f.type === "date" && !e.target.value
-                                    ? null
-                                    : e.target.value,
+                              "days",
+                              (data.days as number[]).includes(i)
+                                ? (data.days as number[]).filter((d) => d !== i)
+                                : [...(data.days as number[]), i],
                             )
                           }
-                        />
-                      )}
-                      {errors[id] ? (
-                        <p className="field-error" id={`${id}-error`}>
-                          {errors[id]}
-                        </p>
-                      ) : null}
-                    </div>
-                  </Fragment>
-                );
-              })}
-            {kind === "shift" ? (
-              <div className="form-field full">
-                <Label>Working days</Label>
-                <div className="day-picker">
-                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
-                    (day, i) => (
-                      <Button
-                        type="button"
-                        key={day}
-                        variant={
-                          (data.days as number[]).includes(i)
-                            ? "default"
-                            : "outline"
-                        }
-                        size="sm"
-                        onClick={() =>
-                          change(
-                            "days",
-                            (data.days as number[]).includes(i)
-                              ? (data.days as number[]).filter((d) => d !== i)
-                              : [...(data.days as number[]), i],
-                          )
-                        }
-                      >
-                        {day}
-                      </Button>
-                    ),
-                  )}
+                        >
+                          {day}
+                        </Button>
+                      ),
+                    )}
+                  </div>
                 </div>
-              </div>
-            ) : null}
-            {["claim", "candidate", "meeting", "document", "leave"].includes(
-              kind,
-            ) ? (
-              <div className="form-field full">
-                <Label>Attachment</Label>
-                <label className="upload-field">
-                  {uploading ? (
-                    <Loader2 size={17} className="animate-spin" />
-                  ) : (
-                    <Upload size={17} />
-                  )}
-                  <span>
-                    {uploading ? "Uploading…" : "Choose a file"}
+              ) : null}
+              {["claim", "candidate", "meeting", "document", "leave"].includes(
+                kind,
+              ) ? (
+                <div className="form-field full">
+                  <Label>Attachment</Label>
+                  <label className="upload-field">
+                    {uploading ? (
+                      <Loader2 size={17} className="animate-spin" />
+                    ) : (
+                      <Upload size={17} />
+                    )}
+                    <span>
+                      {uploading ? "Uploading…" : "Choose a file"}
+                      <small>
+                        {kind === "claim"
+                          ? "Receipt: PDF, PNG or JPG"
+                          : "PDF, DOCX or TXT · extracted text fills the notes"}{" "}
+                        · max 2 MB
+                      </small>
+                    </span>
+                    <input
+                      type="file"
+                      disabled={uploading}
+                      accept={
+                        kind === "claim"
+                          ? ".pdf,.png,.jpg,.jpeg"
+                          : ".pdf,.docx,.txt"
+                      }
+                      onChange={(e) => upload(e.target.files?.[0])}
+                    />
+                  </label>
+                  {data[
+                    kind === "claim"
+                      ? "receiptId"
+                      : kind === "candidate"
+                        ? "resumeFileId"
+                        : "fileId"
+                  ] ? (
+                    <a
+                      className="inline-link"
+                      href={`/api/files/${data[kind === "claim" ? "receiptId" : kind === "candidate" ? "resumeFileId" : "fileId"]}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View saved attachment
+                      <ExternalLink size={13} />
+                    </a>
+                  ) : null}
+                </div>
+              ) : null}
+              {kind === "assessment" ? (
+                <div className="form-field full">
+                  <Label>Questions</Label>
+                  {data.type === "Work preferences" ? (
                     <small>
-                      {kind === "claim"
-                        ? "Receipt: PDF, PNG or JPG"
-                        : "PDF, DOCX or TXT · extracted text fills the notes"}{" "}
-                      · max 2 MB
+                      Self-reported preferences. There are no correct answers or
+                      personality scores.
                     </small>
-                  </span>
-                  <input
-                    type="file"
-                    disabled={uploading}
-                    accept={
-                      kind === "claim"
-                        ? ".pdf,.png,.jpg,.jpeg"
-                        : ".pdf,.docx,.txt"
-                    }
-                    onChange={(e) => upload(e.target.files?.[0])}
-                  />
-                </label>
-                {data[
-                  kind === "claim"
-                    ? "receiptId"
-                    : kind === "candidate"
-                      ? "resumeFileId"
-                      : "fileId"
-                ] ? (
-                  <a
-                    className="inline-link"
-                    href={`/api/files/${data[kind === "claim" ? "receiptId" : kind === "candidate" ? "resumeFileId" : "fileId"]}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View saved attachment
-                    <ExternalLink size={13} />
-                  </a>
-                ) : null}
-              </div>
-            ) : null}
-            {kind === "assessment" ? (
-              <div className="form-field full">
-                <Label>Questions</Label>
-                {data.type === "Work preferences" ? (
-                  <small>
-                    Self-reported preferences. There are no correct answers or
-                    personality scores.
-                  </small>
-                ) : null}
-                {questions.map((q, index) => (
-                  <div className="question-editor" key={index}>
-                    <div className="row-between">
-                      <strong>Question {index + 1}</strong>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        type="button"
-                        aria-label={`Remove question ${index + 1}`}
-                        onClick={() =>
+                  ) : null}
+                  {questions.map((q, index) => (
+                    <div className="question-editor" key={index}>
+                      <div className="row-between">
+                        <strong>Question {index + 1}</strong>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          type="button"
+                          aria-label={`Remove question ${index + 1}`}
+                          onClick={() =>
+                            change(
+                              "questions",
+                              questions.filter((_, i) => i !== index),
+                            )
+                          }
+                        >
+                          <Trash2 size={15} />
+                        </Button>
+                      </div>
+                      <Input
+                        aria-label={`Question ${index + 1}`}
+                        placeholder="Question"
+                        required
+                        value={q.prompt}
+                        onChange={(e) =>
                           change(
                             "questions",
-                            questions.filter((_, i) => i !== index),
+                            questions.map((old, i) =>
+                              i === index
+                                ? { ...old, prompt: e.target.value }
+                                : old,
+                            ),
                           )
                         }
-                      >
-                        <Trash2 size={15} />
-                      </Button>
-                    </div>
-                    <Input
-                      aria-label={`Question ${index + 1}`}
-                      placeholder="Question"
-                      required
-                      value={q.prompt}
-                      onChange={(e) =>
-                        change(
-                          "questions",
-                          questions.map((old, i) =>
-                            i === index
-                              ? { ...old, prompt: e.target.value }
-                              : old,
-                          ),
-                        )
-                      }
-                    />
-                    <Textarea
-                      aria-label={`Question ${index + 1} options`}
-                      placeholder="One option per line"
-                      required
-                      rows={3}
-                      value={q.options.join("\n")}
-                      onChange={(e) =>
-                        change(
-                          "questions",
-                          questions.map((old, i) =>
-                            i === index
-                              ? {
-                                  ...old,
-                                  options: e.target.value.split("\n"),
-                                  correctIndex: 0,
-                                }
-                              : old,
-                          ),
-                        )
-                      }
-                    />
-                    {data.type === "Skills" ? (
-                      <select
-                        aria-label={`Question ${index + 1} correct answer`}
-                        className="native-select"
-                        value={q.correctIndex}
+                      />
+                      <Textarea
+                        aria-label={`Question ${index + 1} options`}
+                        placeholder="One option per line"
+                        required
+                        rows={3}
+                        value={q.options.join("\n")}
                         onChange={(e) =>
                           change(
                             "questions",
@@ -1280,152 +1274,171 @@ export function RecordForm({
                               i === index
                                 ? {
                                     ...old,
-                                    correctIndex: Number(e.target.value),
+                                    options: e.target.value.split("\n"),
+                                    correctIndex: 0,
                                   }
                                 : old,
                             ),
                           )
                         }
+                      />
+                      {data.type === "Skills" ? (
+                        <select
+                          aria-label={`Question ${index + 1} correct answer`}
+                          className="native-select"
+                          value={q.correctIndex}
+                          onChange={(e) =>
+                            change(
+                              "questions",
+                              questions.map((old, i) =>
+                                i === index
+                                  ? {
+                                      ...old,
+                                      correctIndex: Number(e.target.value),
+                                    }
+                                  : old,
+                              ),
+                            )
+                          }
+                        >
+                          {q.options.map((o, i) => (
+                            <option key={i} value={i}>
+                              Correct: {o || `Option ${i + 1}`}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                    </div>
+                  ))}
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={() =>
+                      change("questions", [
+                        ...questions,
+                        { prompt: "", options: ["", ""], correctIndex: 0 },
+                      ])
+                    }
+                  >
+                    <Plus size={15} />
+                    Add question
+                  </Button>
+                </div>
+              ) : null}
+              {kind === "meeting" ? (
+                <div className="form-field full">
+                  <Label>Action items</Label>
+                  {actions.map((a, index) => (
+                    <div className="action-editor" key={index}>
+                      <Input
+                        aria-label={`Action ${index + 1}`}
+                        placeholder="Action"
+                        required
+                        value={a.task}
+                        onChange={(e) =>
+                          change(
+                            "actions",
+                            actions.map((old, i) =>
+                              i === index
+                                ? { ...old, task: e.target.value }
+                                : old,
+                            ),
+                          )
+                        }
+                      />
+                      <Input
+                        aria-label={`Action ${index + 1} owner`}
+                        placeholder="Owner"
+                        value={a.owner}
+                        onChange={(e) =>
+                          change(
+                            "actions",
+                            actions.map((old, i) =>
+                              i === index
+                                ? { ...old, owner: e.target.value }
+                                : old,
+                            ),
+                          )
+                        }
+                      />
+                      <Input
+                        aria-label={`Action ${index + 1} due date`}
+                        type="date"
+                        value={a.dueDate || ""}
+                        onChange={(e) =>
+                          change(
+                            "actions",
+                            actions.map((old, i) =>
+                              i === index
+                                ? { ...old, dueDate: e.target.value || null }
+                                : old,
+                            ),
+                          )
+                        }
+                      />
+                      <Checkbox
+                        aria-label={`Action ${index + 1} completed`}
+                        checked={a.done}
+                        onCheckedChange={(v) =>
+                          change(
+                            "actions",
+                            actions.map((old, i) =>
+                              i === index ? { ...old, done: v === true } : old,
+                            ),
+                          )
+                        }
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Remove action ${index + 1}`}
+                        onClick={() =>
+                          change(
+                            "actions",
+                            actions.filter((_, i) => i !== index),
+                          )
+                        }
                       >
-                        {q.options.map((o, i) => (
-                          <option key={i} value={i}>
-                            Correct: {o || `Option ${i + 1}`}
-                          </option>
-                        ))}
-                      </select>
-                    ) : null}
-                  </div>
-                ))}
+                        <Trash2 size={15} />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={() =>
+                      change("actions", [
+                        ...actions,
+                        { task: "", owner: "", dueDate: null, done: false },
+                      ])
+                    }
+                  >
+                    <Plus size={15} />
+                    Add action item
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+            {kind === "claim" && data.receiptId ? (
+              <div className="info-note">
                 <Button
-                  variant="outline"
                   type="button"
-                  onClick={() =>
-                    change("questions", [
-                      ...questions,
-                      { prompt: "", options: ["", ""], correctIndex: 0 },
-                    ])
-                  }
-                >
-                  <Plus size={15} />
-                  Add question
-                </Button>
-              </div>
-            ) : null}
-            {kind === "meeting" ? (
-              <div className="form-field full">
-                <Label>Action items</Label>
-                {actions.map((a, index) => (
-                  <div className="action-editor" key={index}>
-                    <Input
-                      aria-label={`Action ${index + 1}`}
-                      placeholder="Action"
-                      required
-                      value={a.task}
-                      onChange={(e) =>
-                        change(
-                          "actions",
-                          actions.map((old, i) =>
-                            i === index
-                              ? { ...old, task: e.target.value }
-                              : old,
-                          ),
-                        )
-                      }
-                    />
-                    <Input
-                      aria-label={`Action ${index + 1} owner`}
-                      placeholder="Owner"
-                      value={a.owner}
-                      onChange={(e) =>
-                        change(
-                          "actions",
-                          actions.map((old, i) =>
-                            i === index
-                              ? { ...old, owner: e.target.value }
-                              : old,
-                          ),
-                        )
-                      }
-                    />
-                    <Input
-                      aria-label={`Action ${index + 1} due date`}
-                      type="date"
-                      value={a.dueDate || ""}
-                      onChange={(e) =>
-                        change(
-                          "actions",
-                          actions.map((old, i) =>
-                            i === index
-                              ? { ...old, dueDate: e.target.value || null }
-                              : old,
-                          ),
-                        )
-                      }
-                    />
-                    <Checkbox
-                      aria-label={`Action ${index + 1} completed`}
-                      checked={a.done}
-                      onCheckedChange={(v) =>
-                        change(
-                          "actions",
-                          actions.map((old, i) =>
-                            i === index ? { ...old, done: v === true } : old,
-                          ),
-                        )
-                      }
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Remove action ${index + 1}`}
-                      onClick={() =>
-                        change(
-                          "actions",
-                          actions.filter((_, i) => i !== index),
-                        )
-                      }
-                    >
-                      <Trash2 size={15} />
-                    </Button>
-                  </div>
-                ))}
-                <Button
+                  size="sm"
                   variant="outline"
-                  type="button"
-                  onClick={() =>
-                    change("actions", [
-                      ...actions,
-                      { task: "", owner: "", dueDate: null, done: false },
-                    ])
-                  }
+                  disabled={uploading}
+                  onClick={() => void readReceipt()}
                 >
-                  <Plus size={15} />
-                  Add action item
+                  Read receipt
                 </Button>
+                <span>
+                  Review suggested amount, date and merchant before submitting.
+                </span>
               </div>
             ) : null}
           </div>
-          {kind === "claim" && data.receiptId ? (
-            <div className="info-note">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={uploading}
-                onClick={() => void readReceipt()}
-              >
-                Read receipt
-              </Button>
-              <span>
-                Review suggested amount, date and merchant before submitting.
-              </span>
-            </div>
-          ) : null}
           <DialogFooter className="record-savebar">
-            <span className="save-state">
-              {dirty ? "Unsaved changes" : "No changes yet"}
-            </span>
+            {dirty ? <span className="save-state">Unsaved changes</span> : null}
             <Button
               variant="outline"
               type="button"

@@ -513,7 +513,7 @@ export function RequestsPage({ kind }: { kind: "leave" | "claim" }) {
         </div>
       ) : null}
       {kind === "leave" ? (
-        <section className="panel leave-calendar">
+        <section className="leave-calendar">
           <CalendarPage compact />
         </section>
       ) : null}
