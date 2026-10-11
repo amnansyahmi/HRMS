@@ -1,0 +1,14 @@
+{
+  "realApiStreaming": true,
+  "protocolWithheld": true,
+  "validatedPreview": true,
+  "explicitConfirmation": true,
+  "savedHistory": true,
+  "directoryPagination": true,
+  "formValidation": true,
+  "keepEdits": true,
+  "discardEdits": true,
+  "mobileCards": true,
+  "smallPhoneFits": true,
+  "browserErrors": []
+}

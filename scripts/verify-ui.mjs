@@ -133,7 +133,21 @@ try {
       return cards.map((card) => {
         const style = getComputedStyle(card);
         const foreground = luminance(style.color),
-          background = luminance(style.backgroundColor);
+          background = luminance(
+            (() => {
+              let element = card;
+              while (element) {
+                const value = getComputedStyle(element).backgroundColor;
+                if (
+                  value !== "transparent" &&
+                  !/^rgba\(.*,[ ]?0\)$/.test(value)
+                )
+                  return value;
+                element = element.parentElement;
+              }
+              return "rgb(255, 255, 255)";
+            })(),
+          );
         return (
           (Math.max(foreground, background) + 0.05) /
           (Math.min(foreground, background) + 0.05)
@@ -143,7 +157,7 @@ try {
     assert.equal(ratios.length, 4);
     assert(
       ratios.every((ratio) => ratio >= 4.5),
-      "Colored summary cards need readable text contrast",
+      "Summary metrics need readable text contrast",
     );
   };
 
@@ -298,8 +312,50 @@ try {
   await nav("People");
   await page.getByRole("heading", { name: "People", exact: true }).waitFor();
   assert.equal(await page.locator("tbody tr").count(), 8);
+  await page.getByLabel("Sort by", { exact: true }).selectOption("name-desc");
+  const descendingName = await page
+    .locator(".people-table tbody tr")
+    .first()
+    .innerText();
+  await page.getByLabel("Sort by", { exact: true }).selectOption("name-asc");
+  assert.notEqual(
+    await page.locator(".people-table tbody tr").first().innerText(),
+    descendingName,
+  );
+  await page
+    .getByLabel("Department", { exact: true })
+    .selectOption({ index: 2 });
+  assert((await page.locator(".people-table tbody tr").count()) < 8);
+  await page.getByRole("button", { name: /Remove filter:/ }).click();
+  assert.equal(await page.locator(".people-table tbody tr").count(), 8);
+  assert(
+    await page
+      .getByRole("button", { name: "Next page", exact: true })
+      .isDisabled(),
+  );
+  await page.getByRole("tab", { name: "Organization", exact: true }).click();
+  await page.getByRole("region", { name: "Reporting teams" }).waitFor();
+  await page.screenshot({
+    path: "docs/screenshots/organization-desktop.png",
+    fullPage: true,
+  });
+  await page.getByRole("tab", { name: /^Employees/ }).click();
   await page.getByRole("button", { name: "Add employee", exact: true }).click();
+  await page.getByRole("button", { name: "Add record", exact: true }).click();
+  await page.locator(".form-error-summary").waitFor();
+  assert.equal(
+    await page
+      .getByLabel("Full name", { exact: false })
+      .getAttribute("aria-invalid"),
+    "true",
+  );
   await page.getByLabel("Full name", { exact: false }).fill("UI Test Person");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Keep editing", exact: true }).click();
+  assert.equal(
+    await page.getByLabel("Full name", { exact: false }).inputValue(),
+    "UI Test Person",
+  );
   await page
     .getByLabel("Work email", { exact: false })
     .fill("ui-person@demo.invalid");
@@ -804,8 +860,25 @@ try {
         thread_id: chatThread,
       },
     );
+    assert.equal(route.request().headers().accept, "application/x-ndjson");
     await route.fulfill({
-      json: { threadId: chatThread, text: answer, sources: [], cards: [] },
+      contentType: "application/x-ndjson",
+      body:
+        [
+          { type: "progress", message: "Writing your answer…" },
+          { type: "text", text: "Here’s a clear starting point" },
+          {
+            type: "complete",
+            result: {
+              threadId: chatThread,
+              text: answer,
+              sources: [],
+              cards: [],
+            },
+          },
+        ]
+          .map((event) => JSON.stringify(event))
+          .join("\n") + "\n",
     });
   });
   await page.goto(`${base}/?view=assistant`);
@@ -1155,6 +1228,26 @@ try {
     "Dashboard overflows a small phone",
   );
   await page.setViewportSize({ width: 390, height: 844 });
+  assert(
+    !(await widget("activity").isVisible()),
+    "Phone insights should start collapsed",
+  );
+  await page
+    .getByRole("button", {
+      name: "Attendance and request insights",
+      exact: true,
+    })
+    .click();
+  assert(
+    await widget("activity").isVisible(),
+    "Phone insights should expand on request",
+  );
+  await page
+    .getByRole("button", {
+      name: "Attendance and request insights",
+      exact: true,
+    })
+    .click();
   await page.screenshot({
     path: "docs/screenshots/overview-mobile.png",
     fullPage: true,
@@ -1519,6 +1612,7 @@ try {
     fullPage: true,
   });
   console.log("Checking mobile Settings exit without saving.");
+  const acceptDiscard = (dialog) => dialog.accept();
   let settingsWrites = 0;
   const countSettings = (request) => {
     if (
@@ -1542,6 +1636,16 @@ try {
   await page
     .getByLabel("Company name", { exact: true })
     .fill("Unsaved mobile edit");
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page
+    .getByRole("button", { name: "Back to workspace", exact: true })
+    .click();
+  assert.equal(
+    await page.getByLabel("Company name", { exact: true }).inputValue(),
+    "Unsaved mobile edit",
+    "Keeping edits must stay in Settings",
+  );
+  page.once("dialog", acceptDiscard);
   await page
     .getByRole("button", { name: "Back to workspace", exact: true })
     .click();
@@ -1560,6 +1664,7 @@ try {
   await page
     .getByLabel("Company name", { exact: true })
     .fill("Unsaved browser back");
+  page.once("dialog", acceptDiscard);
   await page.goBack();
   await page.getByRole("heading", { name: "Your workday, Amnan." }).waitFor();
   assert.equal(settingsWrites, 0, "Leaving Settings must not save");
@@ -1595,7 +1700,7 @@ try {
     data: { role: "employee" },
   });
   await page.goto(base);
-  await widget("goals").waitFor();
+  await widget("goals").waitFor({ state: "attached" });
   assert.equal(
     await page
       .getByRole("button", { name: "Add employee", exact: true })

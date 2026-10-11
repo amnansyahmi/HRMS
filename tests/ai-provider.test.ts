@@ -57,6 +57,62 @@ describe("ai-nonymauz-cloud transport", () => {
     });
   });
 
+  it("streams readable text from the provider while retaining protocol blocks for validation", async () => {
+    const parts = [
+      "Hello",
+      ".\n`",
+      "``hr-action\n",
+      '{"action":"configure","data":{"clockReminderMinutes":10}}',
+      "\n```",
+      "\nReview below.",
+    ];
+    const mock = vi.fn(async (_url: unknown, init: RequestInit) => {
+      expect(JSON.parse(String(init.body)).stream).toBe(true);
+      const data =
+        parts
+          .map(
+            (content) =>
+              "data: " +
+              JSON.stringify({
+                id: "stream-test",
+                model: "ai-nonymauz-fast",
+                choices: [
+                  { index: 0, delta: { content }, finish_reason: null },
+                ],
+              }) +
+              "\n\n",
+          )
+          .join("") +
+        "data: " +
+        JSON.stringify({
+          id: "stream-test",
+          model: "ai-nonymauz-fast",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+        }) +
+        "\n\ndata: [DONE]\n\n";
+      return new Response(data, {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    });
+    vi.stubGlobal("fetch", mock);
+    const updates: string[] = [];
+    const reply = await completeAI("hello", undefined, {
+      onText: (text) => updates.push(text),
+    });
+    expect(updates[0]).toBe("Hello");
+    expect(updates.at(-1)).toBe("Hello.\n\nReview below.");
+    expect(
+      updates.every(
+        (text) =>
+          !text.includes("hr-action") && !text.includes("clockReminderMinutes"),
+      ),
+    ).toBe(true);
+    expect(reply.text).toContain("hr-action");
+    expect(reply.usage.totalTokens).toBe(30);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
   it("sends image parts through the configured vision alias", async () => {
     const mock = vi.fn(async () =>
       Response.json({

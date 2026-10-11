@@ -11,7 +11,8 @@
     "test": "vitest run",
     "db:migrate": "node --import tsx scripts/migrate.mts",
     "verify:ui": "node scripts/verify-ui.mjs",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "verify:workflows": "node scripts/verify-ui-workflows.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.66",

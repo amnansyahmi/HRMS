@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { Plus, Trash2, Upload, Loader2, ExternalLink } from "lucide-react";
 import {
   Dialog,
@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useUnsavedChanges } from "./use-unsaved-changes";
+import { useFormFeedback, FormErrorSummary } from "./form-feedback";
 import { api, money } from "@/lib/client";
 import { workingDays, localDate } from "@/lib/calculations";
 import { leaveEntitlement } from "@/lib/leave-entitlement";
@@ -508,6 +510,20 @@ export function RecordForm({
   );
   const [busy, setBusy] = useState(false),
     [uploading, setUploading] = useState(false);
+  const { formRef, errors, labels, validate, clear } = useFormFeedback();
+  const [baseline] = useState(() =>
+    JSON.stringify({ data, employeeId, lineValues }),
+  );
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const dirty = baseline !== JSON.stringify({ data, employeeId, lineValues });
+  useUnsavedChanges(dirty);
+  function requestClose() {
+    if (busy || uploading) return;
+    if (dirty) setDiscardOpen(true);
+    else onClose();
+  }
   const staff = isStaff(workspace.actor),
     employees = workspace.records.filter(
       (r) => r.kind === "employee" && r.data.status !== "Archived",
@@ -540,6 +556,13 @@ export function RecordForm({
   }
   async function save(event: React.FormEvent) {
     event.preventDefault();
+    if (
+      !validate((field) => {
+        if (field.closest("[hidden]")) setExpanded(true);
+      })
+    )
+      return;
+    setSaveError("");
     setBusy(true);
     try {
       const payload = { ...data };
@@ -600,6 +623,7 @@ export function RecordForm({
         });
       onClose();
     } catch (e) {
+      setSaveError((e as Error).message);
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
@@ -751,7 +775,7 @@ export function RecordForm({
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !busy) onClose();
+        if (!open) requestClose();
       }}
     >
       <DialogContent className="record-dialog sm:max-w-[650px]">
@@ -767,7 +791,26 @@ export function RecordForm({
                 : "Keep your workspace records up to date."}
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={save}>
+        <form
+          ref={formRef}
+          noValidate
+          onSubmit={save}
+          onChange={(event) => {
+            const field = event.target;
+            if (
+              field instanceof HTMLInputElement ||
+              field instanceof HTMLSelectElement ||
+              field instanceof HTMLTextAreaElement
+            )
+              clear(field);
+          }}
+        >
+          <FormErrorSummary errors={errors} labels={labels} />
+          {saveError ? (
+            <p className="form-server-error" role="alert">
+              {saveError}
+            </p>
+          ) : null}
           {leavePreview ? (
             <p className="info-note mb-4" role="status">
               {leavePreview}
@@ -878,167 +921,205 @@ export function RecordForm({
                             ? workspace.company.settings.employeeTypes
                             : f.options || []
                         ).map((v) => ({ value: v, label: v }));
+                const advanced =
+                  kind === "employee" &&
+                  employeeDetails.some((field) => field.key === f.key);
+                const heading =
+                  kind === "employee"
+                    ? (
+                        {
+                          name: "Profile",
+                          departmentId: "Employment",
+                          salary: "Pay and leave",
+                          [employeeDetails[0].key]:
+                            "Personal and statutory details",
+                        } as Record<string, string>
+                      )[f.key]
+                    : undefined;
                 return (
-                  <div
-                    key={f.key}
-                    className={`form-field ${["textarea", "multi", "boolean"].includes(f.type || "") ? "full" : ""}`}
-                  >
-                    {f.type !== "boolean" ? (
-                      <Label htmlFor={id}>
-                        {f.label}
-                        {f.required ? (
-                          <span className="required"> *</span>
+                  <Fragment key={f.key}>
+                    {heading ? (
+                      <div className="form-section-heading full">
+                        <h3>{heading}</h3>
+                        {advanced ? (
+                          <button
+                            type="button"
+                            aria-expanded={expanded}
+                            onClick={() => setExpanded((old) => !old)}
+                          >
+                            {expanded
+                              ? "Hide optional details"
+                              : "Show optional details"}
+                          </button>
                         ) : null}
-                      </Label>
-                    ) : null}
-                    {f.type === "lines" ? (
-                      <Textarea
-                        id={id}
-                        rows={4}
-                        value={lineValues[f.key] || ""}
-                        onChange={(e) =>
-                          setLineValues((v) => ({
-                            ...v,
-                            [f.key]: e.target.value,
-                          }))
-                        }
-                      />
-                    ) : f.type === "textarea" ? (
-                      <Textarea
-                        id={id}
-                        required={f.required}
-                        value={String(data[f.key] || "")}
-                        rows={
-                          f.key === "resume" || f.key === "transcript" ? 6 : 4
-                        }
-                        onChange={(e) => change(f.key, e.target.value)}
-                      />
-                    ) : f.type === "select" ? (
-                      <select
-                        id={id}
-                        className="native-select"
-                        required={f.required}
-                        value={String(
-                          kind === "leave" && f.key === "type"
-                            ? data.leaveTypeId || data.type || "Annual"
-                            : data[f.key] || "",
-                        )}
-                        onChange={(e) =>
-                          kind === "leave" && f.key === "type"
-                            ? setData((d) => ({
-                                ...d,
-                                type: String(
-                                  leavePolicies.find(
-                                    (p) => p.id === e.target.value,
-                                  )?.data.name || e.target.value,
-                                ),
-                                leaveTypeId: leavePolicies.some(
-                                  (p) => p.id === e.target.value,
-                                )
-                                  ? e.target.value
-                                  : null,
-                              }))
-                            : change(
-                                f.key,
-                                f.key === "rating"
-                                  ? e.target.value
-                                    ? Number(e.target.value)
-                                    : null
-                                  : e.target.value || null,
-                              )
-                        }
-                      >
-                        {f.source || f.key === "rating" ? (
-                          <option value="">
-                            {f.source ? "Choose…" : "Not evaluated"}
-                          </option>
-                        ) : null}
-                        {options.map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : f.type === "boolean" ? (
-                      <label className="check-label">
-                        <Checkbox
-                          id={id}
-                          checked={!!data[f.key]}
-                          onCheckedChange={(v) => change(f.key, v === true)}
-                        />
-                        {f.label}
-                      </label>
-                    ) : f.type === "multi" ? (
-                      <div className="multi-select">
-                        {options.map((o) => (
-                          <label className="check-label" key={o.value}>
-                            <Checkbox
-                              checked={(
-                                (data[f.key] as string[]) || []
-                              ).includes(o.value)}
-                              onCheckedChange={(v) =>
-                                change(
-                                  f.key,
-                                  v
-                                    ? [
-                                        ...((data[f.key] as string[]) || []),
-                                        o.value,
-                                      ]
-                                    : (data[f.key] as string[]).filter(
-                                        (id) => id !== o.value,
-                                      ),
-                                )
-                              }
-                            />
-                            {o.label}
-                          </label>
-                        ))}
                       </div>
-                    ) : (
-                      <Input
-                        id={id}
-                        required={f.required}
-                        type={f.key === "email" ? "email" : f.type || "text"}
-                        min={f.type === "number" ? (f.min ?? 0) : undefined}
-                        step={
-                          f.type === "number" ? f.step || "0.01" : undefined
-                        }
-                        value={
-                          f.type === "datetime-local" && data[f.key]
-                            ? new Date(String(data[f.key]))
-                                .toLocaleString("sv-SE")
-                                .replace(" ", "T")
-                                .slice(0, 16)
-                            : String(data[f.key] ?? "")
-                        }
-                        onChange={(e) =>
-                          change(
-                            f.key,
-                            f.type === "number"
-                              ? !e.target.value &&
-                                [
-                                  "taxableNormal",
-                                  "taxableAdditional",
-                                  "epfWages",
-                                  "epfNormalWages",
-                                  "socsoWages",
-                                  "latitude",
-                                  "longitude",
-                                ].includes(f.key)
-                                ? null
-                                : Number(e.target.value)
-                              : f.type === "datetime-local"
-                                ? e.target.value
-                                  ? new Date(e.target.value).toISOString()
-                                  : null
-                                : f.type === "date" && !e.target.value
+                    ) : null}
+                    <div
+                      hidden={advanced && !expanded}
+                      className={`form-field ${["textarea", "multi", "boolean"].includes(f.type || "") ? "full" : ""}`}
+                    >
+                      {f.type !== "boolean" ? (
+                        <Label htmlFor={id}>
+                          {f.label}
+                          {f.required ? (
+                            <span className="required"> *</span>
+                          ) : null}
+                        </Label>
+                      ) : null}
+                      {f.type === "lines" ? (
+                        <Textarea
+                          id={id}
+                          rows={4}
+                          value={lineValues[f.key] || ""}
+                          onChange={(e) =>
+                            setLineValues((v) => ({
+                              ...v,
+                              [f.key]: e.target.value,
+                            }))
+                          }
+                        />
+                      ) : f.type === "textarea" ? (
+                        <Textarea
+                          id={id}
+                          required={f.required}
+                          value={String(data[f.key] || "")}
+                          rows={
+                            f.key === "resume" || f.key === "transcript" ? 6 : 4
+                          }
+                          onChange={(e) => change(f.key, e.target.value)}
+                        />
+                      ) : f.type === "select" ? (
+                        <select
+                          id={id}
+                          className="native-select"
+                          required={f.required}
+                          value={String(
+                            kind === "leave" && f.key === "type"
+                              ? data.leaveTypeId || data.type || "Annual"
+                              : data[f.key] || "",
+                          )}
+                          onChange={(e) =>
+                            kind === "leave" && f.key === "type"
+                              ? setData((d) => ({
+                                  ...d,
+                                  type: String(
+                                    leavePolicies.find(
+                                      (p) => p.id === e.target.value,
+                                    )?.data.name || e.target.value,
+                                  ),
+                                  leaveTypeId: leavePolicies.some(
+                                    (p) => p.id === e.target.value,
+                                  )
+                                    ? e.target.value
+                                    : null,
+                                }))
+                              : change(
+                                  f.key,
+                                  f.key === "rating"
+                                    ? e.target.value
+                                      ? Number(e.target.value)
+                                      : null
+                                    : e.target.value || null,
+                                )
+                          }
+                        >
+                          {f.source || f.key === "rating" ? (
+                            <option value="">
+                              {f.source ? "Choose…" : "Not evaluated"}
+                            </option>
+                          ) : null}
+                          {options.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : f.type === "boolean" ? (
+                        <label className="check-label">
+                          <Checkbox
+                            id={id}
+                            checked={!!data[f.key]}
+                            onCheckedChange={(v) => change(f.key, v === true)}
+                          />
+                          {f.label}
+                        </label>
+                      ) : f.type === "multi" ? (
+                        <div className="multi-select">
+                          {options.map((o) => (
+                            <label className="check-label" key={o.value}>
+                              <Checkbox
+                                checked={(
+                                  (data[f.key] as string[]) || []
+                                ).includes(o.value)}
+                                onCheckedChange={(v) =>
+                                  change(
+                                    f.key,
+                                    v
+                                      ? [
+                                          ...((data[f.key] as string[]) || []),
+                                          o.value,
+                                        ]
+                                      : (data[f.key] as string[]).filter(
+                                          (id) => id !== o.value,
+                                        ),
+                                  )
+                                }
+                              />
+                              {o.label}
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <Input
+                          id={id}
+                          required={f.required}
+                          type={f.key === "email" ? "email" : f.type || "text"}
+                          min={f.type === "number" ? (f.min ?? 0) : undefined}
+                          step={
+                            f.type === "number" ? f.step || "0.01" : undefined
+                          }
+                          value={
+                            f.type === "datetime-local" && data[f.key]
+                              ? new Date(String(data[f.key]))
+                                  .toLocaleString("sv-SE")
+                                  .replace(" ", "T")
+                                  .slice(0, 16)
+                              : String(data[f.key] ?? "")
+                          }
+                          onChange={(e) =>
+                            change(
+                              f.key,
+                              f.type === "number"
+                                ? !e.target.value &&
+                                  [
+                                    "taxableNormal",
+                                    "taxableAdditional",
+                                    "epfWages",
+                                    "epfNormalWages",
+                                    "socsoWages",
+                                    "latitude",
+                                    "longitude",
+                                  ].includes(f.key)
                                   ? null
-                                  : e.target.value,
-                          )
-                        }
-                      />
-                    )}
-                  </div>
+                                  : Number(e.target.value)
+                                : f.type === "datetime-local"
+                                  ? e.target.value
+                                    ? new Date(e.target.value).toISOString()
+                                    : null
+                                  : f.type === "date" && !e.target.value
+                                    ? null
+                                    : e.target.value,
+                            )
+                          }
+                        />
+                      )}
+                      {errors[id] ? (
+                        <p className="field-error" id={`${id}-error`}>
+                          {errors[id]}
+                        </p>
+                      ) : null}
+                    </div>
+                  </Fragment>
                 );
               })}
             {kind === "shift" ? (
@@ -1341,12 +1422,15 @@ export function RecordForm({
               </span>
             </div>
           ) : null}
-          <DialogFooter>
+          <DialogFooter className="record-savebar">
+            <span className="save-state">
+              {dirty ? "Unsaved changes" : "No changes yet"}
+            </span>
             <Button
               variant="outline"
               type="button"
               disabled={busy}
-              onClick={onClose}
+              onClick={requestClose}
             >
               Cancel
             </Button>
@@ -1363,6 +1447,24 @@ export function RecordForm({
           </DialogFooter>
         </form>
       </DialogContent>
+      <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard unsaved changes?</DialogTitle>
+            <DialogDescription>
+              Your edits have not been saved.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscardOpen(false)}>
+              Keep editing
+            </Button>
+            <Button variant="destructive" onClick={onClose}>
+              Discard changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

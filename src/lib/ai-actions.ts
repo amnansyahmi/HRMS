@@ -41,6 +41,7 @@ export type ActionCard = {
   expiresAt: string;
   preview: Data;
   requiresLocation: boolean;
+  target?: string;
 };
 /** Model output is only a proposal. No write tool is supplied to the model. */
 export async function saveAIProposal(
@@ -233,6 +234,14 @@ async function saveOneProposal(
         action: proposal.action,
         expiresAt,
         preview: proposal.data,
+        target: record
+          ? String(
+              record.data.name ||
+                record.data.title ||
+                context.find((r) => r.id === record.employee_id)?.data.name ||
+                proposal.label,
+            )
+          : undefined,
         requiresLocation,
       },
     ],

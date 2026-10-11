@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useDeferredValue } from "react";
 import {
   Pencil,
   Building2,
@@ -25,21 +25,48 @@ import {
   Empty,
   AddButton,
 } from "./common";
+import { OrganizationView } from "./organization-view";
+import { ResultPagination, FilterChip } from "./data-controls";
+import {
+  directoryPeople,
+  employeeStatus,
+  type DirectoryFilters,
+} from "@/lib/people-directory";
 import { money, shortDate } from "@/lib/client";
 import { isStaff, type HRRecord } from "@/lib/types";
 export function PeoplePage() {
   const { workspace, edit, ask } = useWorkspace(),
-    [search, setSearch] = useState(""),
+    [filters, setFilters] = useState<DirectoryFilters>({
+      search: "",
+      department: "",
+      status: "",
+      employment: "",
+      sort: "name-asc",
+    }),
+    [page, setPage] = useState(1),
+    [pageSize, setPageSize] = useState(10),
     [tab, setTab] = useState("employees"),
     [selected, setSelected] = useState<HRRecord | null>(null),
     staff = isStaff(workspace.actor);
   const employees = workspace.records.filter((r) => r.kind === "employee"),
     departments = workspace.records.filter((r) => r.kind === "department"),
-    filtered = employees.filter((e) =>
-      JSON.stringify(e.data).toLowerCase().includes(search.toLowerCase()),
+    deferredSearch = useDeferredValue(filters.search),
+    search = filters.search,
+    filtered = directoryPeople(employees, departments, {
+      ...filters,
+      search: deferredSearch,
+    }),
+    currentPage = Math.min(
+      page,
+      Math.max(1, Math.ceil(filtered.length / pageSize)),
     ),
+    rows = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize),
     departmentName = (id: unknown) =>
       String(departments.find((d) => d.id === id)?.data.name || "Unassigned");
+  function filter(key: keyof DirectoryFilters, value: string) {
+    setFilters((old) => ({ ...old, [key]: value }));
+    setPage(1);
+  }
   return (
     <>
       <PageHeader
@@ -50,7 +77,7 @@ export function PeoplePage() {
             <AddButton
               onClick={() =>
                 edit(
-                  tab === "employees"
+                  ["employees", "organization"].includes(tab)
                     ? "employee"
                     : tab === "designations"
                       ? "designation"
@@ -58,7 +85,7 @@ export function PeoplePage() {
                 )
               }
             >
-              {tab === "employees"
+              {["employees", "organization"].includes(tab)
                 ? "Add employee"
                 : tab === "designations"
                   ? "Add designation"
@@ -74,12 +101,13 @@ export function PeoplePage() {
           </TabsTrigger>
           <TabsTrigger value="departments">Departments</TabsTrigger>
           <TabsTrigger value="designations">Designations</TabsTrigger>
+          <TabsTrigger value="organization">Organization</TabsTrigger>
         </TabsList>
         <TabsContent value="employees">
           <div className="table-toolbar">
             <SearchField
               value={search}
-              onChange={setSearch}
+              onChange={(value) => filter("search", value)}
               placeholder="Search people, roles or email…"
             />
             {staff ? (
@@ -91,8 +119,92 @@ export function PeoplePage() {
               </Button>
             ) : null}
           </div>
+          <div className="directory-filters">
+            <label>
+              Department
+              <select
+                className="native-select"
+                aria-label="Department"
+                value={filters.department}
+                onChange={(e) => filter("department", e.target.value)}
+              >
+                <option value="">All departments</option>
+                <option value="unassigned">Unassigned</option>
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {String(d.data.name)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Status
+              <select
+                className="native-select"
+                aria-label="Status"
+                value={filters.status}
+                onChange={(e) => filter("status", e.target.value)}
+              >
+                <option value="">All statuses</option>
+                {Array.from(new Set(employees.map(employeeStatus)))
+                  .sort()
+                  .map((v) => (
+                    <option key={v}>{v}</option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              Employment
+              <select
+                className="native-select"
+                aria-label="Employment"
+                value={filters.employment}
+                onChange={(e) => filter("employment", e.target.value)}
+              >
+                <option value="">All types</option>
+                {Array.from(
+                  new Set(
+                    employees.map((e) => String(e.data.employmentType || "")),
+                  ),
+                )
+                  .filter(Boolean)
+                  .sort()
+                  .map((v) => (
+                    <option key={v}>{v}</option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              Sort by
+              <select
+                className="native-select"
+                aria-label="Sort by"
+                value={filters.sort}
+                onChange={(e) => filter("sort", e.target.value)}
+              >
+                <option value="name-asc">Name A–Z</option>
+                <option value="name-desc">Name Z–A</option>
+                <option value="department">Department</option>
+              </select>
+            </label>
+          </div>
+          <div className="active-filters">
+            {(["department", "status", "employment"] as const)
+              .filter((key) => filters[key])
+              .map((key) => (
+                <FilterChip
+                  key={key}
+                  label={
+                    key === "department"
+                      ? departmentName(filters[key])
+                      : filters[key]
+                  }
+                  clear={() => filter(key, "")}
+                />
+              ))}
+          </div>
           {filtered.length ? (
-            <div className="table-wrap">
+            <div className="table-wrap people-table">
               <table>
                 <thead>
                   <tr>
@@ -104,7 +216,7 @@ export function PeoplePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((e) => (
+                  {rows.map((e) => (
                     <tr key={e.id}>
                       <td>
                         <button
@@ -117,9 +229,13 @@ export function PeoplePage() {
                           />
                         </button>
                       </td>
-                      <td>{departmentName(e.data.departmentId)}</td>
-                      <td>{String(e.data.employmentType)}</td>
-                      <td>
+                      <td data-label="Department">
+                        {departmentName(e.data.departmentId)}
+                      </td>
+                      <td data-label="Employment">
+                        {String(e.data.employmentType || "Unassigned")}
+                      </td>
+                      <td data-label="Status">
                         <Status
                           value={e.data.employmentStatus || e.data.status}
                         />
@@ -153,15 +269,41 @@ export function PeoplePage() {
           ) : (
             <Empty
               title={
-                search ? "No matching people" : "Build your team directory"
+                search ||
+                filters.department ||
+                filters.status ||
+                filters.employment
+                  ? "No matching people"
+                  : "Build your team directory"
               }
               description={
-                search
-                  ? "Try a different name or role."
+                search ||
+                filters.department ||
+                filters.status ||
+                filters.employment
+                  ? "Try a different search or clear your filters."
                   : "Add your first employee and create their profile."
               }
             />
           )}
+          <ResultPagination
+            count={filtered.length}
+            page={currentPage}
+            pageSize={pageSize}
+            onPage={setPage}
+            onPageSize={(n) => {
+              setPageSize(n);
+              setPage(1);
+            }}
+          />
+          {workspace.truncated ? (
+            <p className="scope-note">
+              Results cover the records currently loaded in this workspace.
+            </p>
+          ) : null}
+        </TabsContent>
+        <TabsContent value="organization">
+          <OrganizationView employees={employees} onSelect={setSelected} />
         </TabsContent>
         <TabsContent value="departments">
           <div className="record-cards">
